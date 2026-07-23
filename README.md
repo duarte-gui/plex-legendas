@@ -43,24 +43,33 @@ python -m plexsubs processar 3243       # processa uma série
 python -m plexsubs exportar --simular   # mostra o que seria exportado
 ```
 
-## O score, e por que ele importa
+## Como o candidato é escolhido
 
-Cada candidato vem com uma pontuação que mede o quanto ele corresponde ao
-**seu arquivo específico** — release, resolução, codec, grupo.
+O score do Plex mistura avaliação, downloads e casamento de release — então o
+**mais bem votado nem sempre casa com o seu arquivo**. Na prática, isso morde:
+uma legenda de 720p muito votada, aplicada a um arquivo 1080p de outro release,
+fica dessincronizada, mesmo havendo uma legenda 1080p igualmente boa na lista.
 
-Na prática, a separação é nítida:
+Por isso a escolha ordena **do maior para o menor, primeiro pela correspondência
+com o nome do arquivo, depois pela avaliação**:
 
-| Situação | Score observado |
+1. **Afinidade de release** — compara resolução, fonte (WEB-DL/HDTV/BluRay…),
+   codec e grupo entre o nome do arquivo e o título de cada candidato
+   (`afinidade_release` em `plexsubs/plex.py`). Resolução pesa mais, porque é o
+   que mais afeta o sincronismo.
+2. **Score do Plex** — desempata entre candidatos de mesma afinidade.
+
+Se nenhum candidato casa com o arquivo (afinidade 0 para todos), a decisão
+recai sobre o mais bem votado — o comportamento antigo, como último recurso.
+
+O `SCORE_MIN` (padrão 1000) segue valendo como piso: abaixo dele o candidato é
+descartado, porque uma legenda errada é pior que nenhuma. Faixas observadas:
+
+| Situação | Score |
 |---|---|
 | Legenda do mesmo release | 5.000 – 24.000 |
-| Legenda de outro release da mesma obra | 1.000 – 5.000 |
-| Correspondência espúria, de outra obra | 0 – 600 |
-
-O padrão de `SCORE_MIN=1000` fica na fronteira. Reduza se estiver perdendo
-legendas legítimas; aumente se aparecer legenda de outra série.
-
-Descartar é proposital: uma legenda errada é pior que nenhuma, porque parece
-resolvido até você começar a assistir.
+| Outro release da mesma obra | 1.000 – 5.000 |
+| Correspondência espúria | 0 – 600 |
 
 ## Onde o Plex guarda a legenda baixada
 

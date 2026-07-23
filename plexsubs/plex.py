@@ -11,6 +11,7 @@ Endpoints usados (descobertos por inspeção, não são documentados oficialment
 """
 from __future__ import annotations
 
+import re
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -31,6 +32,7 @@ class Episodio:
     temporada: str
     numero: str
     titulo: str
+    arquivo: str = ""   # nome do arquivo de vídeo (para casar o release)
 
 
 @dataclass
@@ -39,6 +41,47 @@ class Candidato:
     score: int
     titulo: str
     provedor: str
+    afinidade: int = 0   # quão bem o release casa com o arquivo (0 = nada)
+
+
+# Tokens de release usados para casar a legenda com o arquivo. A resolução
+# pesa mais que os demais: uma legenda de 720p num arquivo 1080p costuma ter
+# corte/timing diferente e dessincroniza.
+_RESOLUCAO = re.compile(r"\b(2160p|1080p|720p|480p)\b", re.I)
+_FONTE = re.compile(r"\b(web[\s._-]?dl|webrip|web|bluray|blu[\s._-]?ray|"
+                    r"bdrip|brrip|hdtv|dvdrip|hdrip)\b", re.I)
+_CODEC = re.compile(r"\b(x264|x265|h[\s._-]?264|h[\s._-]?265|avc|hevc|xvid)\b", re.I)
+_GRUPO = re.compile(r"-([A-Za-z0-9]+)(?:\.\w{2,4})?$")
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[\s._-]+", "", (s or "").lower())
+
+
+def afinidade_release(arquivo: str, candidato: str) -> int:
+    """Pontua quanto o título do candidato casa com o nome do arquivo.
+
+    resolução vale 3, fonte 2, codec 1, grupo de release 2. Zero quando nada
+    coincide — nesse caso a decisão fica só com a avaliação do Plex.
+    """
+    def tok(regex, texto):
+        m = regex.search(texto or "")
+        return _norm(m.group(1)) if m else None
+
+    peso = 0
+    ra, rc = tok(_RESOLUCAO, arquivo), tok(_RESOLUCAO, candidato)
+    if ra and rc and ra == rc:
+        peso += 3
+    fa, fc = tok(_FONTE, arquivo), tok(_FONTE, candidato)
+    if fa and fc and fa.replace("webdl", "web") == fc.replace("webdl", "web"):
+        peso += 2
+    ca, cc = tok(_CODEC, arquivo), tok(_CODEC, candidato)
+    if ca and cc and ca.replace("h", "x") == cc.replace("h", "x"):
+        peso += 1
+    ga, gc = tok(_GRUPO, arquivo), tok(_GRUPO, candidato)
+    if ga and gc and ga == gc:
+        peso += 2
+    return peso
 
 
 class PlexError(RuntimeError):
@@ -95,9 +138,14 @@ class Plex:
         r = self._req(f"/library/metadata/{serie_rk}/allLeaves")
         if r is None:
             return []
-        return [Episodio(v.get("ratingKey"), v.get("parentIndex") or "?",
-                         v.get("index") or "?", v.get("title") or "")
-                for v in r.iter("Video")]
+        saida = []
+        for v in r.iter("Video"):
+            arq = ""
+            for p in v.iter("Part"):
+                arq = (p.get("file") or "").rsplit("/", 1)[-1]
+            saida.append(Episodio(v.get("ratingKey"), v.get("parentIndex") or "?",
+                                  v.get("index") or "?", v.get("title") or "", arq))
+        return saida
 
     def legendas_do_episodio(self, ep_rk: str) -> list[tuple[str, str, bool]]:
         """[(stream_id, idioma, selecionada)] das legendas já presentes."""
@@ -119,7 +167,21 @@ class Plex:
 
     # ---------- busca e download ----------
 
-    def buscar(self, ep_rk: str, idioma: str) -> list[Candidato]:
+    def arquivo_do_episodio(self, ep_rk: str) -> str:
+        """Nome do arquivo de vídeo do episódio (para casar o release)."""
+        r = self._req(f"/library/metadata/{ep_rk}")
+        if r is None:
+            return ""
+        for p in r.iter("Part"):
+            return (p.get("file") or "").rsplit("/", 1)[-1]
+        return ""
+
+    def buscar(self, ep_rk: str, idioma: str, arquivo: str = "") -> list[Candidato]:
+        """Candidatos ordenados por afinidade de release e, em empate, por score.
+
+        Passe `arquivo` (nome do vídeo) para priorizar a legenda que casa com o
+        release. Sem ele, cai no comportamento antigo (só por score).
+        """
         r = self._req(f"/library/metadata/{ep_rk}/subtitles", language=idioma)
         if r is None:
             return []
@@ -131,10 +193,13 @@ class Plex:
                 score = int(s.get("score") or 0)
             except ValueError:
                 score = 0
-            saida.append(Candidato(s.get("id"), score,
-                                   s.get("title") or "",
-                                   s.get("providerTitle") or ""))
-        return sorted(saida, key=lambda c: c.score, reverse=True)
+            titulo = s.get("title") or ""
+            saida.append(Candidato(s.get("id"), score, titulo,
+                                   s.get("providerTitle") or "",
+                                   afinidade_release(arquivo, titulo) if arquivo else 0))
+        # do maior para o menor: primeiro pela correspondência com o arquivo,
+        # depois pela avaliação do Plex.
+        return sorted(saida, key=lambda c: (c.afinidade, c.score), reverse=True)
 
     def aplicar(self, ep_rk: str, stream_id: str) -> None:
         """Baixa o candidato e o aplica ao episódio.
@@ -160,7 +225,8 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
             yield {**base, "estado": "ja_tinha"}
             continue
 
-        cands = plex.buscar(ep.rating_key, idioma)
+        arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
+        cands = plex.buscar(ep.rating_key, idioma, arquivo)
         if not cands:
             yield {**base, "estado": "sem_candidato"}
             continue
@@ -177,4 +243,5 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
             continue
 
         yield {**base, "estado": "baixada", "score": melhor.score,
+               "afinidade": melhor.afinidade,
                "release": melhor.titulo, "provedor": melhor.provedor}

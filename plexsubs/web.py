@@ -118,7 +118,7 @@ function zera(){ for(const k in contagem){contagem[k]=0; $('#c-'+k).textContent=
 
 function anota(d){
   if (d.estado in contagem) { contagem[d.estado]++; $('#c-'+d.estado).textContent=contagem[d.estado]; }
-  const det = d.release ? `score ${d.score} · ${d.release}`
+  const det = d.release ? `afinidade ${d.afinidade ?? 0} · score ${d.score} · ${d.release}`
             : d.score !== undefined ? `melhor score ${d.score}`
             : d.detalhe || d.titulo || '';
   const el=document.createElement('div');
