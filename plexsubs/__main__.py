@@ -14,6 +14,9 @@ def main() -> int:
     pr = sub.add_parser("processar", help="baixa legendas de uma série")
     pr.add_argument("serie", help="ratingKey da série no Plex")
     pr.add_argument("--score", type=int, help="score mínimo aceito")
+    pr.add_argument("--reavaliar", action="store_true",
+                    help="reconsidera episódios que já têm legenda e troca por "
+                         "outra de afinidade de release maior")
 
     ex = sub.add_parser("exportar", help="exporta os blobs do Plex via Bazarr")
     ex.add_argument("--simular", action="store_true", help="não envia nada")
@@ -43,9 +46,16 @@ def main() -> int:
     if a.cmd == "processar":
         from .plex import processar_serie
         tot = {}
-        for e in processar_serie(plex, a.serie, cfg.idioma, a.score or cfg.score_min):
+        for e in processar_serie(plex, a.serie, cfg.idioma, a.score or cfg.score_min,
+                                 reavaliar=a.reavaliar):
             tot[e["estado"]] = tot.get(e["estado"], 0) + 1
-            extra = f"  score={e['score']}" if "score" in e else ""
+            extra = ""
+            if e["estado"] == "melhorada":
+                extra = f"  afinidade {e['afinidade_antes']}->{e['afinidade']}"
+            elif "afinidade" in e:
+                extra = f"  afinidade={e['afinidade']}"
+            elif "score" in e:
+                extra = f"  score={e['score']}"
             print(f"[{e['i']:>3}/{e['total']}] {e['ep']:<8} {e['estado']}{extra}")
         print("\nresumo:", ", ".join(f"{k}={v}" for k, v in sorted(tot.items())))
         return 0

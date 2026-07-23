@@ -41,6 +41,7 @@ python -m plexsubs                      # interface web em http://localhost:8770
 python -m plexsubs series               # lista as séries e seus ratingKeys
 python -m plexsubs processar 3243       # processa uma série
 python -m plexsubs exportar --simular   # mostra o que seria exportado
+python -m plexsubs processar 3243 --reavaliar   # troca legendas mal casadas de execuções antigas
 ```
 
 ## Como o candidato é escolhido

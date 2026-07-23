@@ -165,6 +165,24 @@ class Plex:
         return any(prefixo.lower() in idi.lower()
                    for _sid, idi, _sel in self.legendas_do_episodio(ep_rk))
 
+    def afinidade_atual(self, ep_rk: str, arquivo: str, prefixo: str) -> int:
+        """Maior afinidade de release entre as legendas do idioma já presentes.
+
+        Usa o título do stream (que traz o release, ex.: 'The.Rookie...1080p.WEB')
+        para medir quão bem a legenda já baixada casa com o arquivo. Uma legenda
+        sem release no título (só 'Português') fica com afinidade 0.
+        """
+        r = self._req(f"/library/metadata/{ep_rk}")
+        if r is None:
+            return 0
+        melhor = 0
+        for p in r.iter("Part"):
+            for s in p.iter("Stream"):
+                if s.get("streamType") == "3" and prefixo.lower() in (s.get("language") or "").lower():
+                    titulo = s.get("title") or s.get("extendedDisplayTitle") or ""
+                    melhor = max(melhor, afinidade_release(arquivo, titulo))
+        return melhor
+
     # ---------- busca e download ----------
 
     def arquivo_do_episodio(self, ep_rk: str) -> str:
@@ -211,8 +229,14 @@ class Plex:
 
 
 def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
-                    prefixo_idioma: str = "Portugu") -> Iterator[dict]:
-    """Percorre a série e baixa o melhor candidato de cada episódio faltante.
+                    prefixo_idioma: str = "Portugu",
+                    reavaliar: bool = False) -> Iterator[dict]:
+    """Percorre a série e baixa o melhor candidato de cada episódio.
+
+    Por padrão pula episódios que já têm legenda no idioma. Com `reavaliar=True`,
+    reconsidera esses episódios: se existir um candidato com afinidade de release
+    MAIOR que a da legenda atual, baixa e passa a usá-lo (corrige legendas mal
+    casadas de execuções antigas). Nunca troca por algo de afinidade igual/menor.
 
     Gera um dicionário por episódio, para a interface acompanhar em tempo real.
     """
@@ -220,12 +244,14 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
     for i, ep in enumerate(eps, 1):
         base = {"i": i, "total": len(eps),
                 "ep": f"S{ep.temporada}E{ep.numero}", "titulo": ep.titulo}
+        arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
 
-        if plex.tem_idioma(ep.rating_key, prefixo_idioma):
+        ja_tem = plex.tem_idioma(ep.rating_key, prefixo_idioma)
+        atual = plex.afinidade_atual(ep.rating_key, arquivo, prefixo_idioma) if ja_tem else -1
+        if ja_tem and not reavaliar:
             yield {**base, "estado": "ja_tinha"}
             continue
 
-        arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
         cands = plex.buscar(ep.rating_key, idioma, arquivo)
         if not cands:
             yield {**base, "estado": "sem_candidato"}
@@ -236,10 +262,21 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
             yield {**base, "estado": "score_baixo", "score": melhor.score}
             continue
 
+        # No modo reavaliar, só troca se achar afinidade estritamente maior.
+        if ja_tem and melhor.afinidade <= atual:
+            yield {**base, "estado": "ja_otima", "afinidade": atual}
+            continue
+
         try:
             plex.aplicar(ep.rating_key, melhor.stream_id)
         except PlexError as e:
             yield {**base, "estado": "erro", "detalhe": str(e)}
+            continue
+
+        if ja_tem:
+            yield {**base, "estado": "melhorada", "score": melhor.score,
+                   "afinidade": melhor.afinidade, "afinidade_antes": atual,
+                   "release": melhor.titulo, "provedor": melhor.provedor}
             continue
 
         yield {**base, "estado": "baixada", "score": melhor.score,
