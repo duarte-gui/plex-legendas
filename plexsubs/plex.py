@@ -49,7 +49,7 @@ class Candidato:
 # corte/timing diferente e dessincroniza.
 _RESOLUCAO = re.compile(r"\b(2160p|1080p|720p|480p)\b", re.I)
 _FONTE = re.compile(r"\b(web[\s._-]?dl|webrip|web|bluray|blu[\s._-]?ray|"
-                    r"bdrip|brrip|hdtv|dvdrip|hdrip)\b", re.I)
+                    r"bdrip|brrip|hdtv|pdtv|dvdrip|dvd|hdrip)\b", re.I)
 _CODEC = re.compile(r"\b(x264|x265|h[\s._-]?264|h[\s._-]?265|avc|hevc|xvid)\b", re.I)
 _GRUPO = re.compile(r"-([A-Za-z0-9]+)(?:\.\w{2,4})?$")
 
@@ -72,8 +72,10 @@ def afinidade_release(arquivo: str, candidato: str) -> int:
     ra, rc = tok(_RESOLUCAO, arquivo), tok(_RESOLUCAO, candidato)
     if ra and rc and ra == rc:
         peso += 3
+    def norm_fonte(f):
+        return f.replace("webdl", "web").replace("dvdrip", "dvd")
     fa, fc = tok(_FONTE, arquivo), tok(_FONTE, candidato)
-    if fa and fc and fa.replace("webdl", "web") == fc.replace("webdl", "web"):
+    if fa and fc and norm_fonte(fa) == norm_fonte(fc):
         peso += 2
     ca, cc = tok(_CODEC, arquivo), tok(_CODEC, candidato)
     if ca and cc and ca.replace("h", "x") == cc.replace("h", "x"):
