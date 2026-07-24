@@ -147,7 +147,13 @@ def traduzir_episodio(plex, ep_rk: str, idioma_alvo: str = "pt-BR",
         if not cands:
             return {"estado": "sem_ingles"}
         plex.aplicar(ep_rk, cands[0].stream_id)
-        en_id = plex.id_legenda_externa(ep_rk, "en")
+        # o Plex não indexa a legenda baixada na hora — aguarda aparecer.
+        import time as _t
+        for _ in range(15):
+            en_id = plex.id_legenda_externa(ep_rk, "en")
+            if en_id:
+                break
+            _t.sleep(2)
         if not en_id:
             return {"estado": "falha_download"}
 
