@@ -16,8 +16,13 @@ import os
 import re
 import urllib.request
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-MODELO = os.environ.get("TRADUZ_MODELO", "hauhau-qwen3-35b")
+def _ollama_url() -> str:
+    # resolvido na hora da chamada: o .env pode ser carregado depois do import.
+    return os.environ.get("OLLAMA_URL", "http://localhost:11434")
+
+
+def _modelo() -> str:
+    return os.environ.get("TRADUZ_MODELO", "hauhau-qwen3-35b")
 
 # marcas de legenda para surdos (HI) e rótulos de locutor, que atrapalham a
 # leitura; removidas de forma conservadora.
@@ -53,9 +58,11 @@ def limpar_hi(texto: str) -> str:
     return _HI.sub("", texto).replace("  ", " ").strip(" -")
 
 
-def _traduzir_bloco(textos: list[str], idioma_nome: str, ollama_url: str,
-                    modelo: str) -> list[str]:
+def _traduzir_bloco(textos: list[str], idioma_nome: str,
+                    ollama_url: str | None = None, modelo: str | None = None) -> list[str]:
     """Traduz uma lista de falas; devolve a mesma quantidade (fallback = original)."""
+    ollama_url = ollama_url or _ollama_url()
+    modelo = modelo or _modelo()
     numeradas = "\n".join(f"{i + 1}\t{t}" for i, t in enumerate(textos))
     instr = (
         f"Traduza as falas de legenda do INGLÊS para {idioma_nome}. "
@@ -88,7 +95,7 @@ def _traduzir_bloco(textos: list[str], idioma_nome: str, ollama_url: str,
 
 def traduzir_srt(srt: bytes, idioma_nome: str = "Português do Brasil",
                  bloco: int = 25, limpar: bool = True,
-                 ollama_url: str = OLLAMA_URL, modelo: str = MODELO):
+                 ollama_url: str | None = None, modelo: str | None = None):
     """Traduz um SRT (bytes) e devolve outro SRT (bytes), tempos preservados.
 
     Gera, além do resultado, eventos de progresso via `yield` — ou use
