@@ -63,6 +63,21 @@ PAGINA = """<!doctype html>
   .badge-en { display:inline-block; font-size:.62rem; font-weight:700; letter-spacing:.05em;
               padding:.02rem .28rem; margin-left:.35rem; border:1px solid var(--acento);
               color:var(--acento); border-radius:2px; vertical-align:middle }
+  .grade { display:flex; flex-direction:column; gap:.4rem }
+  .card { display:flex; align-items:center; gap:.8rem; padding:.6rem .8rem; background:var(--papel);
+          border:1px solid var(--linha); border-left:4px solid var(--linha); cursor:pointer }
+  .card:hover { border-left-color:var(--acento) }
+  .card.tem { border-left-color:var(--ok) }
+  .card.fraca { border-left-color:var(--alerta) }
+  .card .cnum { font-family:var(--mono); font-weight:700; color:var(--tenue); min-width:2.6rem }
+  .card .cinfo { flex:1; min-width:0 }
+  .card .ctit { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .card .csub { font-size:.78rem; color:var(--tenue); margin-top:.1rem }
+  .pill { display:inline-block; font-size:.68rem; font-weight:600; padding:.08rem .4rem;
+          border-radius:3px; margin-right:.3rem }
+  .pill.ok { background:var(--ok); color:#fff } .pill.no { background:var(--linha); color:var(--suave) }
+  .pill.wa { background:var(--alerta); color:#fff }
+  .card .cgo { color:var(--tenue); font-size:1.1rem }
   .baixada .st { color:var(--ok) } .score_baixo .st { color:var(--alerta) }
   .erro .st,.sem_candidato .st { color:var(--erro) }
   .ja_tinha { opacity:.55 }
@@ -102,27 +117,20 @@ PAGINA = """<!doctype html>
     <label>Série
       <select id="serie"><option>carregando…</option></select>
     </label>
+    <label>Temporada
+      <select id="temp"><option>—</option></select>
+    </label>
     <label>Score mínimo
       <input id="score" type="number" value="__SCORE__" min="0" step="100">
     </label>
-    <button id="cob" class="sec">Ver cobertura</button>
-    <button id="ir">Buscar legendas</button>
+    <button id="ir">Buscar nesta temporada</button>
     <button id="exp" class="sec" title="__EXPT__" __EXPD__>Exportar para arquivo</button>
   </div>
 
   <div id="resumo-cob" class="cob"></div>
-
   <div class="prog"><i id="pi"></i></div>
 
-  <div class="placar">
-    <div><div class="n" id="c-baixada">0</div><div class="r">baixadas</div></div>
-    <div><div class="n" id="c-ja_tinha">0</div><div class="r">já tinham</div></div>
-    <div><div class="n" id="c-score_baixo">0</div><div class="r">score baixo</div></div>
-    <div><div class="n" id="c-sem_candidato">0</div><div class="r">sem candidato</div></div>
-    <div><div class="n" id="c-erro">0</div><div class="r">erros</div></div>
-  </div>
-
-  <div class="linhas" id="log"></div>
+  <div id="grade" class="grade"></div>
 
   <div id="modal" class="modal" hidden>
     <div class="modal-cx">
@@ -142,8 +150,8 @@ PAGINA = """<!doctype html>
 
 <script>
 const $ = s => document.querySelector(s);
-const contagem = {baixada:0, ja_tinha:0, score_baixo:0, sem_candidato:0, erro:0};
 
+// ---- 1) séries ----
 fetch('api/series').then(r=>r.json()).then(ss=>{
   const sel = $('#serie'); sel.innerHTML='';
   for (const s of ss) {
@@ -151,130 +159,134 @@ fetch('api/series').then(r=>r.json()).then(ss=>{
     o.value=s.rating_key; o.textContent=`${s.titulo}  ·  ${s.biblioteca}`;
     sel.appendChild(o);
   }
-  if (ss.length) cobertura(sel.value);   // já mostra a cobertura da 1ª série
+  if (ss.length) carregarTemporadas(sel.value);
 }).catch(()=> $('#serie').innerHTML='<option>falha ao consultar o Plex</option>');
 
-let ultimaTemp = null;
-function zera(){ for(const k in contagem){contagem[k]=0; $('#c-'+k).textContent='0';}
-                 $('#log').innerHTML=''; $('#pi').style.width='0'; ultimaTemp=null; }
+// ---- 2) temporadas da série ----
+async function carregarTemporadas(serie){
+  const sel=$('#temp'); sel.innerHTML='<option>…</option>';
+  $('#grade').innerHTML=''; $('#resumo-cob').textContent='';
+  try{
+    const ts = await (await fetch(`api/temporadas?serie=${serie}`)).json();
+    sel.innerHTML='';
+    for(const t of ts){ const o=document.createElement('option'); o.value=t; o.textContent='Temporada '+t; sel.appendChild(o); }
+    if(ts.length) carregarEpisodios();
+    else $('#grade').innerHTML='<p style="color:var(--tenue)">Série sem temporadas numeradas.</p>';
+  }catch(e){ sel.innerHTML='<option>falha</option>'; }
+}
 
-function anota(d){
-  if (d.estado in contagem) { contagem[d.estado]++; $('#c-'+d.estado).textContent=contagem[d.estado]; }
-  const log=$('#log');
-  // cabeçalho de temporada quando muda
-  const mt=(d.ep||'').match(/S(\\d+)/i); const temp=mt?mt[1]:'?';
-  if (temp!==ultimaTemp){ ultimaTemp=temp;
-    const h=document.createElement('div'); h.className='season';
-    h.textContent='Temporada '+temp; log.appendChild(h); }
-  const num=(d.ep||'').match(/E(\\d+)/i);
-  const det = d.release ? `score ${d.score}${d.afinidade?` · afin ${d.afinidade}`:''} · ${d.release}`
-            : d.score !== undefined ? `melhor score ${d.score}`
-            : d.detalhe || '';
+// ---- 3) episódios da temporada (lista interativa) ----
+let epToken=0;
+async function carregarEpisodios(){
+  const serie=$('#serie').value, temp=$('#temp').value;
+  if(!temp) return;
+  const meu=++epToken;
+  const grade=$('#grade'); grade.innerHTML='';
+  const box=$('#resumo-cob'); box.className='cob ativo'; box.textContent='carregando episódios…';
+  let com=0, emb=0, total=0;
+  try{
+    const r=await fetch(`api/episodios?serie=${serie}&temporada=${temp}`);
+    const leitor=r.body.getReader(); const dec=new TextDecoder(); let resto='';
+    while(true){
+      const {done,value}=await leitor.read(); if(done) break;
+      if(meu!==epToken){ leitor.cancel(); return; }
+      resto+=dec.decode(value,{stream:true});
+      const partes=resto.split('\\n'); resto=partes.pop();
+      for(const p of partes) if(p.trim()){ try{ const d=JSON.parse(p);
+        total=d.total; if(d.tem_pt) com++; if(d.en_emb) emb++;
+        grade.appendChild(cardEpisodio(d)); $('#pi').style.width=(100*d.i/d.total)+'%';
+      }catch(e){} }
+    }
+    box.className='cob '+(com<total?'parcial':'ok');
+    box.textContent=`Temporada ${temp}: ${com} de ${total} com legenda`
+      +(com<total?` · ${total-com} sem`:' · completa ✓')+(emb?` · ${emb} com inglês embutido`:'');
+    $('#pi').style.width='0';
+  }catch(e){ box.textContent='falha ao carregar episódios'; box.className='cob'; }
+}
+
+function cardEpisodio(d){
+  // "fraca" só quando a legenda veio de PROVEDOR e casa mal (afinidade baixa);
+  // sidecar nossa (afinidade 0 por não ter release no título) conta como boa.
+  const fraca = d.tem_pt && d.de_provedor && d.afinidade < 2;
   const el=document.createElement('div');
-  el.className='l '+d.estado; el.dataset.ep=d.ep||''; el.dataset.rk=d.rk||'';
-  el.title='clique para escolher a legenda manualmente';
-  el.innerHTML=`<span class="ep"></span><span class="tit"></span>`+
-               `<span class="st"></span><span class="de"></span>`;
-  el.querySelector('.ep').textContent = num?('E'+num[1]):(d.ep||'');
-  el.querySelector('.tit').textContent = (d.titulo||'') + (d.en_emb?' ':'');
-  if (d.en_emb){ const b=document.createElement('span'); b.className='badge-en'; b.textContent='EN';
-                 b.title='tem legenda em inglês embutida (traduzível)'; el.querySelector('.tit').appendChild(b); }
-  el.querySelector('.st').textContent = (d.estado||'').replace('_',' ');
-  el.querySelector('.de').textContent = det;
-  log.appendChild(el); log.scrollTop=log.scrollHeight;
-  if (d.total) $('#pi').style.width = (100*d.i/d.total)+'%';
-}
-
-async function fluxo(url){
-  zera(); $('#ir').disabled=true; $('#exp').disabled=true;
-  try {
-    const r = await fetch(url);
-    const leitor = r.body.getReader(); const dec=new TextDecoder(); let resto='';
-    while (true) {
-      const {done, value} = await leitor.read(); if (done) break;
-      resto += dec.decode(value, {stream:true});
-      const partes = resto.split('\\n'); resto = partes.pop();
-      for (const p of partes) if (p.trim()) { try { anota(JSON.parse(p)); } catch(e){} }
-    }
-  } finally { $('#ir').disabled=false; $('#exp').disabled=false; }
-}
-
-// Cobertura: varre a série (sem baixar) e mostra quantos já têm legenda.
-let cobToken = 0;
-async function cobertura(serie){
-  const meu = ++cobToken;               // cancela scan anterior se trocar de série
-  const box = $('#resumo-cob');
-  box.textContent = 'consultando o Plex…'; box.className = 'cob ativo';
-  try {
-    const r = await fetch(`api/cobertura?serie=${serie}`);
-    const leitor = r.body.getReader(); const dec = new TextDecoder(); let resto='';
-    let com=0, emb=0, total=0, i=0;
-    while (true) {
-      const {done, value} = await leitor.read(); if (done) break;
-      if (meu !== cobToken) { leitor.cancel(); return; }
-      resto += dec.decode(value, {stream:true});
-      const partes = resto.split('\\n'); resto = partes.pop();
-      for (const p of partes) if (p.trim()) {
-        try { const d=JSON.parse(p); com=d.com; emb=d.emb; total=d.total; i=d.i;
-              box.textContent = `escaneando… ${i}/${total} · ${com} com legenda`; } catch(e){}
-      }
-    }
-    const falta = total - com;
-    box.textContent = `${com} de ${total} episódios já têm legenda`
-      + (falta ? ` · ${falta} sem` : ' · completo ✓')
-      + (emb ? ` · ${emb} com inglês embutido (traduzível)` : '');
-    box.className = 'cob ' + (falta ? 'parcial' : 'ok');
-  } catch(e){ box.textContent = 'falha ao consultar cobertura'; box.className='cob'; }
+  el.className='card'+(d.tem_pt?(fraca?' fraca':' tem'):'');
+  el.dataset.rk=d.rk; el.dataset.ep=d.ep;
+  let sub;
+  if(!d.tem_pt) sub='<span class="pill no">sem legenda</span>clique para escolher';
+  else if(fraca) sub=`<span class="pill wa">legenda pt · afinidade ${d.afinidade}</span>pode não casar — clique para trocar`;
+  else if(d.de_provedor) sub=`<span class="pill ok">legenda pt · afinidade ${d.afinidade}</span>`;
+  else sub='<span class="pill ok">legenda pt (arquivo)</span>';
+  el.innerHTML=`<div class="cnum">E${String(d.numero).padStart(2,'0')}</div>`
+    +`<div class="cinfo"><div class="ctit"></div><div class="csub">${sub}</div></div>`
+    +`<div class="cgo">›</div>`;
+  el.querySelector('.ctit').innerHTML='';
+  el.querySelector('.ctit').textContent=d.titulo||d.ep;
+  if(en){ const s=document.createElement('span'); s.className='badge-en'; s.textContent='EN';
+          s.title='tem legenda em inglês embutida (traduzível)'; el.querySelector('.ctit').appendChild(s); }
+  el.onclick=()=>abrirSeletor(d.rk, d.ep, el);
+  return el;
 }
 
 // ---- seletor manual de legenda por episódio ----
-let epAberto = null;
-async function abrirSeletor(rk, rotulo){
-  epAberto = rk;
-  $('#modal-tit').textContent = 'Escolher legenda · ' + rotulo;
-  $('#modal-arq').textContent = 'consultando candidatos…';
-  $('#modal-lista').innerHTML = '';
-  $('#modal').hidden = false;
-  try {
-    const r = await fetch(`api/candidatos?ep=${rk}`);
-    const d = await r.json();
-    $('#modal-arq').textContent = d.arquivo || '';
-    if (!d.candidatos.length){ $('#modal-lista').innerHTML='<p>Nenhum candidato para este episódio.</p>'; return; }
-    for (const c of d.candidatos){
+async function abrirSeletor(rk, rotulo, card){
+  $('#modal-tit').textContent='Escolher legenda · '+rotulo;
+  $('#modal-arq').textContent='consultando candidatos…';
+  $('#modal-lista').innerHTML=''; $('#modal').hidden=false;
+  try{
+    const d=await (await fetch(`api/candidatos?ep=${rk}`)).json();
+    $('#modal-arq').textContent=d.arquivo||'';
+    if(!d.candidatos.length){ $('#modal-lista').innerHTML='<p>Nenhum candidato para este episódio.</p>'; return; }
+    for(const c of d.candidatos){
       const row=document.createElement('div'); row.className='cand'+(c.mesma_serie?'':' outra');
-      const aviso = c.mesma_serie ? '' : ' <span class="warn">⚠ outra série</span>';
-      row.innerHTML=`<div class="info"><div class="rel"></div>`+
-        `<div class="met">afinidade <b>${c.afinidade}</b> · score ${c.score} · ${c.provedor||''}${aviso}</div></div>`+
-        `<button class="apl">Aplicar</button>`;
-      row.querySelector('.rel').textContent = c.titulo;
-      row.querySelector('.apl').onclick = async () => {
+      const aviso=c.mesma_serie?'':' <span class="warn">⚠ outra série</span>';
+      row.innerHTML=`<div class="info"><div class="rel"></div>`
+        +`<div class="met">afinidade <b>${c.afinidade}</b> · score ${c.score} · ${c.provedor||''}${aviso}</div></div>`
+        +`<button class="apl">Aplicar</button>`;
+      row.querySelector('.rel').textContent=c.titulo;
+      row.querySelector('.apl').onclick=async()=>{
         row.querySelector('.apl').textContent='aplicando…';
-        const rr = await fetch(`api/aplicar?ep=${rk}&stream=${encodeURIComponent(c.stream)}`, {method:'POST'});
-        const jj = await rr.json();
-        if (jj.ok){ marcarAplicada(rk, c); $('#modal').hidden=true; }
-        else { row.querySelector('.apl').textContent='falhou'; }
+        const jj=await (await fetch(`api/aplicar?ep=${rk}&stream=${encodeURIComponent(c.stream)}`,{method:'POST'})).json();
+        if(jj.ok){ atualizarCard(card,c); $('#modal').hidden=true; }
+        else row.querySelector('.apl').textContent='falhou';
       };
       $('#modal-lista').appendChild(row);
     }
-  } catch(e){ $('#modal-arq').textContent='falha ao consultar candidatos'; }
+  }catch(e){ $('#modal-arq').textContent='falha ao consultar candidatos'; }
 }
-function marcarAplicada(rk, c){
-  const l=document.querySelector(`.l[data-rk="${rk}"]`);
-  if (!l) return;
-  l.className='l baixada';
-  l.querySelector('.st').textContent='aplicada';
-  l.querySelector('.de').textContent=`manual · afin ${c.afinidade} · score ${c.score} · ${c.titulo}`;
+function atualizarCard(card,c){
+  if(!card) return;
+  card.className='card '+(c.afinidade>=2?'tem':'fraca');
+  card.querySelector('.csub').innerHTML=`<span class="pill ${c.afinidade>=2?'ok':'wa'}">aplicada · afinidade ${c.afinidade}</span>${c.titulo}`;
 }
-$('#log').addEventListener('click', e => {
-  const l=e.target.closest('.l'); if (l && l.dataset.rk) abrirSeletor(l.dataset.rk, l.dataset.ep);
-});
-$('#modal-x').onclick = () => $('#modal').hidden=true;
-$('#modal').addEventListener('click', e => { if (e.target.id==='modal') $('#modal').hidden=true; });
+$('#modal-x').onclick=()=>$('#modal').hidden=true;
+$('#modal').addEventListener('click',e=>{ if(e.target.id==='modal') $('#modal').hidden=true; });
 
-$('#serie').addEventListener('change', () => cobertura($('#serie').value));
-$('#cob').onclick = () => cobertura($('#serie').value);
-$('#ir').onclick = () => fluxo(`api/processar?serie=${$('#serie').value}&score=${$('#score').value}`);
-$('#exp').onclick = () => { if (confirm('Exportar as legendas do banco do Plex para arquivo, via Bazarr?')) fluxo('api/exportar'); };
+// ---- buscar (automático) na temporada selecionada ----
+async function buscarTemporada(){
+  const serie=$('#serie').value, temp=$('#temp').value, score=$('#score').value;
+  $('#ir').disabled=true; $('#ir').textContent='buscando…';
+  try{
+    const r=await fetch(`api/processar?serie=${serie}&temporada=${temp}&score=${score}`);
+    const leitor=r.body.getReader(); const dec=new TextDecoder(); let resto='';
+    while(true){
+      const {done,value}=await leitor.read(); if(done) break;
+      resto+=dec.decode(value,{stream:true});
+      const partes=resto.split('\\n'); resto=partes.pop();
+      for(const p of partes) if(p.trim()){ try{ const d=JSON.parse(p);
+        if(d.total) $('#pi').style.width=(100*d.i/d.total)+'%';
+        const card=document.querySelector(`.card[data-rk="${d.rk}"]`);
+        if(card && d.estado==='baixada') atualizarCard(card,{afinidade:d.afinidade??0,titulo:d.release||''});
+      }catch(e){} }
+    }
+    $('#pi').style.width='0';
+  } finally { $('#ir').disabled=false; $('#ir').textContent='Buscar nesta temporada'; carregarEpisodios(); }
+}
+
+$('#serie').addEventListener('change',()=>carregarTemporadas($('#serie').value));
+$('#temp').addEventListener('change',carregarEpisodios);
+$('#ir').onclick=buscarTemporada;
+$('#exp').onclick=async()=>{ if(!confirm('Exportar as legendas do banco do Plex para arquivo, via Bazarr?')) return;
+  const r=await fetch('api/exportar'); await r.text(); alert('Exportação concluída.'); };
 </script>
 </body></html>
 """
@@ -321,6 +333,17 @@ class Handler(BaseHTTPRequestHandler):
         if rota == "/api/cobertura":
             return self._fluxo_cobertura(q)
 
+        if rota == "/api/temporadas":
+            serie = (q.get("serie") or [""])[0]
+            if not serie:
+                return self._envia(b"informe a serie", "text/plain", 400)
+            from .plex import temporadas
+            self._envia(json.dumps(temporadas(self.plex, serie)).encode(), "application/json")
+            return
+
+        if rota == "/api/episodios":
+            return self._fluxo_episodios(q)
+
         if rota == "/api/candidatos":
             return self._candidatos(q)
 
@@ -328,6 +351,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._aplicar(q)
 
         self._envia(b"nao encontrado", "text/plain", 404)
+
+    def _fluxo_episodios(self, q):
+        from .plex import episodios_status
+        serie = (q.get("serie") or [""])[0]
+        temp = (q.get("temporada") or [""])[0]
+        if not serie or not temp:
+            return self._envia(b"informe serie e temporada", "text/plain", 400)
+        self._abre_fluxo()
+        try:
+            for evt in episodios_status(self.plex, serie, temp, self.cfg.idioma):
+                self._emite(evt)
+        except Exception as e:  # noqa: BLE001
+            self._emite({"erro": str(e)})
 
     def _candidatos(self, q):
         """Lista os candidatos de um episódio, para escolha manual no painel."""
@@ -377,9 +413,11 @@ class Handler(BaseHTTPRequestHandler):
             score = int((q.get("score") or [self.cfg.score_min])[0])
         except ValueError:
             score = self.cfg.score_min
+        temp = (q.get("temporada") or [""])[0]
         self._abre_fluxo()
         try:
-            for evt in processar_serie(self.plex, serie, self.cfg.idioma, score):
+            for evt in processar_serie(self.plex, serie, self.cfg.idioma, score,
+                                       temporada=temp):
                 self._emite(evt)
         except Exception as e:  # noqa: BLE001
             self._emite({"estado": "erro", "detalhe": str(e), "ep": ""})

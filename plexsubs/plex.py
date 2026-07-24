@@ -301,6 +301,34 @@ class Plex:
                   key=f"/library/streams/{stream_id}")
 
 
+def temporadas(plex: Plex, serie_rk: str) -> list[int]:
+    """Números das temporadas da série, ordenados."""
+    nums = {int(e.temporada) for e in plex.episodios(serie_rk) if e.temporada.isdigit()}
+    return sorted(nums)
+
+
+def episodios_status(plex: Plex, serie_rk: str, temporada: str,
+                     idioma: str, prefixo_idioma: str = "Portugu") -> Iterator[dict]:
+    """Status de cada episódio de uma temporada, para a lista interativa.
+
+    Por episódio: se tem legenda no idioma, a afinidade da atual, se tem inglês
+    embutido (traduzível) e se a legenda atual veio de provedor. Só leitura.
+    """
+    eps = [e for e in plex.episodios(serie_rk) if e.temporada == str(temporada)]
+    for i, ep in enumerate(eps, 1):
+        arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
+        streams = plex.streams_legenda(ep.rating_key)
+        tem_pt = any(prefixo_idioma.lower() in s["lang"].lower() for s in streams)
+        en_emb = any(s["embutida"] and "english" in s["lang"].lower() for s in streams)
+        de_provedor = any(prefixo_idioma.lower() in s["lang"].lower() and s["provedor"]
+                          for s in streams)
+        afin = plex.afinidade_atual(ep.rating_key, arquivo, prefixo_idioma) if tem_pt else -1
+        yield {"i": i, "total": len(eps), "rk": ep.rating_key,
+               "ep": f"S{ep.temporada}E{ep.numero}", "numero": ep.numero,
+               "titulo": ep.titulo, "tem_pt": tem_pt, "afinidade": afin,
+               "en_emb": en_emb, "de_provedor": de_provedor}
+
+
 def cobertura_serie(plex: Plex, serie_rk: str,
                     prefixo_idioma: str = "Portugu") -> Iterator[dict]:
     """Varre a série SEM baixar nada e informa quantos episódios já têm legenda.
@@ -326,7 +354,8 @@ def cobertura_serie(plex: Plex, serie_rk: str,
 def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
                     prefixo_idioma: str = "Portugu",
                     reavaliar: bool = False,
-                    so_existentes: bool = False) -> Iterator[dict]:
+                    so_existentes: bool = False,
+                    temporada: str = "") -> Iterator[dict]:
     """Percorre a série e baixa o melhor candidato de cada episódio.
 
     Por padrão pula episódios que já têm legenda no idioma e baixa nos vazios.
@@ -342,6 +371,8 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
     Gera um dicionário por episódio, para a interface acompanhar em tempo real.
     """
     eps = plex.episodios(serie_rk)
+    if temporada:
+        eps = [e for e in eps if e.temporada == str(temporada)]
     for i, ep in enumerate(eps, 1):
         arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
         streams = plex.streams_legenda(ep.rating_key)
