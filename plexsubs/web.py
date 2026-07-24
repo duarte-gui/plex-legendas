@@ -81,6 +81,8 @@ PAGINA = """<!doctype html>
   .baixada .st { color:var(--ok) } .score_baixo .st { color:var(--alerta) }
   .erro .st,.sem_candidato .st { color:var(--erro) }
   .ja_tinha { opacity:.55 }
+  .cabec { display:flex; gap:.8rem; align-items:center }
+  .capa { width:52px; height:78px; object-fit:cover; border-radius:6px; box-shadow:0 1px 4px rgba(0,0,0,.35); flex:0 0 auto }
   .cob { font-size:.9rem; color:var(--suave); min-height:1.3em; padding:.2rem 0 }
   .cob.ativo { color:var(--tenue) }
   .cob.ok { color:var(--ok); font-weight:600 }
@@ -133,7 +135,10 @@ PAGINA = """<!doctype html>
     <button id="exp" class="sec" title="__EXPT__" __EXPD__>Exportar para arquivo</button>
   </div>
 
-  <div id="resumo-cob" class="cob"></div>
+  <div class="cabec">
+    <img id="capa" class="capa" alt="" hidden>
+    <div id="resumo-cob" class="cob"></div>
+  </div>
   <div class="prog"><i id="pi"></i></div>
 
   <div id="grade" class="grade"></div>
@@ -203,6 +208,10 @@ let epToken=0;
 let episodiosAtuais=[];   // ordem da temporada, para navegar no seletor
 async function carregarEpisodios(){
   const serie=$('#serie').value, temp=$('#temp').value;
+  const capa=$('#capa');
+  if(serie){ capa.hidden=false; capa.src='api/capa?rk='+encodeURIComponent(serie);
+             capa.onerror=()=>{capa.hidden=true;}; }
+  else capa.hidden=true;
   if(!temp) return;
   const meu=++epToken;
   const grade=$('#grade'); grade.innerHTML=''; episodiosAtuais=[];
@@ -414,6 +423,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if rota == "/api/episodios":
             return self._fluxo_episodios(q)
+
+        if rota == "/api/capa":
+            rk = (q.get("rk") or [""])[0]
+            img = self.plex.capa(rk) if rk else None
+            if not img:
+                return self._envia(b"sem capa", "text/plain", 404)
+            self._envia(img[0], img[1])
+            return
 
         if rota == "/api/candidatos":
             return self._candidatos(q)

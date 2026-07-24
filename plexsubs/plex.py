@@ -249,6 +249,27 @@ class Plex:
 
     # ---------- busca e download ----------
 
+    def capa(self, rk: str) -> tuple[bytes, str] | None:
+        """Baixa a capa (poster) de uma série/temporada. (bytes, content-type)."""
+        try:
+            r = self._req(f"/library/metadata/{rk}")
+        except PlexError:
+            return None
+        if r is None:
+            return None
+        thumb = ""
+        for d in list(r.iter("Directory")) + list(r.iter("Video")):
+            thumb = d.get("thumb") or ""
+            break
+        if not thumb:
+            return None
+        alvo = f"{self.url}{thumb}?X-Plex-Token={self.token}"
+        try:
+            with urllib.request.urlopen(alvo, timeout=self.timeout) as f:
+                return f.read(), f.headers.get("Content-Type", "image/jpeg")
+        except urllib.error.HTTPError:
+            return None
+
     def arquivo_do_episodio(self, ep_rk: str) -> str:
         """Nome do arquivo de vídeo do episódio (para casar o release)."""
         r = self._req(f"/library/metadata/{ep_rk}")
