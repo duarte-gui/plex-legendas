@@ -122,6 +122,9 @@ PAGINA = """<!doctype html>
   </header>
 
   <div class="barra">
+    <label>Idioma
+      <select id="idioma"><option>…</option></select>
+    </label>
     <label>Biblioteca
       <select id="lib"><option>…</option></select>
     </label>
@@ -182,7 +185,20 @@ function codigoIdioma(lang){
   return (lang||'??').slice(0,2).toUpperCase();
 }
 
-// ---- 0) bibliotecas (Séries / Animes / Filmes) ----
+// idioma-alvo (código Plex) e nome de exibição, escolhidos no dropdown
+let idiomaAlvo='pt-BR', idiomaNome='Português (BR)';
+const qi=()=>'&idioma='+encodeURIComponent(idiomaAlvo);
+
+// ---- 0a) idiomas (alvo da legenda) ----
+fetch('api/idiomas').then(r=>r.json()).then(d=>{
+  const sel=$('#idioma'); sel.innerHTML='';
+  for(const l of d.idiomas){ const o=document.createElement('option');
+    o.value=l.code; o.textContent=l.nome; sel.appendChild(o); }
+  idiomaAlvo=d.padrao||'pt-BR'; sel.value=idiomaAlvo;
+  idiomaNome=(d.idiomas.find(l=>l.code===idiomaAlvo)||{}).nome||idiomaAlvo;
+}).catch(()=> $('#idioma').innerHTML='<option>falha</option>');
+
+// ---- 0b) bibliotecas (Séries / Animes / Filmes) ----
 fetch('api/bibliotecas').then(r=>r.json()).then(ls=>{
   const sel=$('#lib'); sel.innerHTML='';
   for(const l of ls){ const o=document.createElement('option');
@@ -238,7 +254,7 @@ async function carregarEpisodios(){
   const box=$('#resumo-cob'); box.className='cob ativo'; box.textContent=filme?'carregando filme…':'carregando episódios…';
   let com=0, total=0; const embSet=new Set();
   try{
-    const url=filme?`api/episodios?serie=${serie}&tipo=movie`:`api/episodios?serie=${serie}&temporada=${temp}`;
+    const url=(filme?`api/episodios?serie=${serie}&tipo=movie`:`api/episodios?serie=${serie}&temporada=${temp}`)+qi();
     const r=await fetch(url);
     const leitor=r.body.getReader(); const dec=new TextDecoder(); let resto='';
     while(true){
@@ -254,7 +270,7 @@ async function carregarEpisodios(){
     }
     box.className='cob '+(com<total?'parcial':'ok');
     const embs=[...embSet].sort();
-    box.textContent=(filme?`${com} de ${total} com legenda`:`Temporada ${temp}: ${com} de ${total} com legenda`)
+    box.textContent=(filme?`${com} de ${total} com legenda em ${idiomaNome}`:`Temporada ${temp}: ${com} de ${total} com legenda em ${idiomaNome}`)
       +(com<total?` · ${total-com} sem`:' · completa ✓')
       +(embs.length?` · legenda embutida no arquivo: ${embs.join(', ')}`:'');
     $('#pi').style.width='0';
@@ -302,7 +318,7 @@ function abrirIdx(idx){
 }
 async function carregarCandidatos(e){
   try{
-    const d=await (await fetch(`api/candidatos?ep=${e.rk}`)).json();
+    const d=await (await fetch(`api/candidatos?ep=${e.rk}`+qi())).json();
     if(e!==episodiosAtuais[idxAtual]) return;   // já navegou para outro
     $('#modal-arq').textContent=d.arquivo||'';
     const lista=$('#modal-lista'); lista.innerHTML='';
@@ -318,7 +334,7 @@ async function carregarCandidatos(e){
       btn.onclick=async()=>{
         btn.textContent='aplicando…'; btn.disabled=true;
         try{
-          const rr=await fetch(`api/aplicar?ep=${e.rk}&stream=${encodeURIComponent(c.stream)}`);
+          const rr=await fetch(`api/aplicar?ep=${e.rk}&stream=${encodeURIComponent(c.stream)}`+qi());
           const jj=await rr.json();
           if(jj.ok){ atualizarCard(e.card,c);
             if($('#modal-avanca').checked && idxAtual<episodiosAtuais.length-1) abrirIdx(idxAtual+1);
@@ -360,7 +376,7 @@ async function buscarTemporada(){
   const box=$('#resumo-cob'); box.className='cob ativo';
   const c={baixada:0,ja_tinha:0,ja_otima:0,score_baixo:0,sem_candidato:0,erro:0};
   try{
-    const r=await fetch(`api/processar?serie=${serie}&temporada=${temp}&score=${score}`);
+    const r=await fetch(`api/processar?serie=${serie}&temporada=${temp}&score=${score}`+qi());
     const leitor=r.body.getReader(); const dec=new TextDecoder(); let resto='';
     while(true){
       const {done,value}=await leitor.read(); if(done) break;
@@ -383,6 +399,8 @@ async function buscarTemporada(){
   } finally { $('#ir').disabled=false; $('#ir').textContent='Buscar nesta temporada'; }
 }
 
+$('#idioma').addEventListener('change',()=>{ idiomaAlvo=$('#idioma').value;
+  idiomaNome=$('#idioma').selectedOptions[0].textContent; carregarEpisodios(); });
 $('#lib').addEventListener('change',()=>carregarSeries($('#lib').value));
 $('#serie').addEventListener('change',()=>carregarTemporadas($('#serie').value));
 $('#temp').addEventListener('change',carregarEpisodios);
@@ -421,6 +439,12 @@ class Handler(BaseHTTPRequestHandler):
                              if self.cfg.tem_bazarr else
                              "Defina BAZARR_URL e BAZARR_APIKEY para habilitar"))
             return self._envia(html.encode())
+
+        if rota == "/api/idiomas":
+            from .plex import IDIOMAS
+            libs = [{"code": c, "nome": v["nome"]} for c, v in IDIOMAS.items()]
+            return self._envia(json.dumps({"idiomas": libs, "padrao": self.cfg.idioma}).encode(),
+                               "application/json")
 
         if rota == "/api/bibliotecas":
             libs = [{"key": k, "tipo": t, "titulo": nome}
@@ -477,14 +501,21 @@ class Handler(BaseHTTPRequestHandler):
         tipo = (q.get("tipo") or [""])[0]
         if not serie or (tipo != "movie" and not temp):
             return self._envia(b"informe serie e temporada", "text/plain", 400)
+        idioma = self._idioma(q)
         self._abre_fluxo()
         try:
-            eventos = (filme_status(self.plex, serie, self.cfg.idioma) if tipo == "movie"
-                       else episodios_status(self.plex, serie, temp, self.cfg.idioma))
+            eventos = (filme_status(self.plex, serie, idioma) if tipo == "movie"
+                       else episodios_status(self.plex, serie, temp, idioma))
             for evt in eventos:
                 self._emite(evt)
         except Exception as e:  # noqa: BLE001
             self._emite({"erro": str(e)})
+
+    def _idioma(self, q):
+        """Idioma-alvo do request (query `idioma`), com o do .env como padrão."""
+        from .plex import IDIOMAS
+        cod = (q.get("idioma") or [""])[0]
+        return cod if cod in IDIOMAS else self.cfg.idioma
 
     def _candidatos(self, q):
         """Lista os candidatos de um episódio, para escolha manual no painel."""
@@ -494,7 +525,7 @@ class Handler(BaseHTTPRequestHandler):
         arquivo = self.plex.arquivo_do_episodio(rk)
         # sem filtro de série: mostra tudo, marcando os divergentes, para o
         # usuário escolher no caso de o nome divergir.
-        cands = self.plex.buscar(rk, self.cfg.idioma, arquivo, filtrar_serie=False)
+        cands = self.plex.buscar(rk, self._idioma(q), arquivo, filtrar_serie=False)
         dados = [{"stream": c.stream_id, "titulo": c.titulo, "score": c.score,
                   "afinidade": c.afinidade, "provedor": c.provedor,
                   "mesma_serie": c.mesma_serie} for c in cands]
@@ -537,7 +568,7 @@ class Handler(BaseHTTPRequestHandler):
         temp = (q.get("temporada") or [""])[0]
         self._abre_fluxo()
         try:
-            for evt in processar_serie(self.plex, serie, self.cfg.idioma, score,
+            for evt in processar_serie(self.plex, serie, self._idioma(q), score,
                                        temporada=temp):
                 self._emite(evt)
         except Exception as e:  # noqa: BLE001
@@ -550,7 +581,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._envia(b"informe a serie", "text/plain", 400)
         self._abre_fluxo()
         try:
-            for evt in cobertura_serie(self.plex, serie):
+            for evt in cobertura_serie(self.plex, serie, self._idioma(q)):
                 self._emite(evt)
         except Exception as e:  # noqa: BLE001
             self._emite({"estado": "erro", "detalhe": str(e), "ep": ""})

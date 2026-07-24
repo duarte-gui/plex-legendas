@@ -60,6 +60,46 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s._-]+", "", (s or "").lower())
 
 
+# Idiomas que o painel oferece. A chave é o código que o Plex espera em
+# `?language=` (2 partes; `por`/`pob` dão HTTP 500). `base` é a tag ISO de 2
+# letras (languageTag), `codes` os códigos de 3 letras (languageCode) e `np` um
+# prefixo do nome como fallback quando o stream não traz tag/código.
+IDIOMAS: dict[str, dict] = {
+    "pt-BR": {"nome": "Português (BR)", "base": "pt", "codes": ("por", "pob"), "np": "portugu"},
+    "en":    {"nome": "English",        "base": "en", "codes": ("eng",),       "np": "english"},
+    "es":    {"nome": "Español",        "base": "es", "codes": ("spa", "esp"), "np": "espa"},
+    "fr":    {"nome": "Français",       "base": "fr", "codes": ("fre", "fra"), "np": "fran"},
+    "de":    {"nome": "Deutsch",        "base": "de", "codes": ("ger", "deu"), "np": "german"},
+    "it":    {"nome": "Italiano",       "base": "it", "codes": ("ita",),       "np": "italia"},
+    "ja":    {"nome": "日本語 (JP)",     "base": "ja", "codes": ("jpn",),       "np": "japan"},
+}
+
+
+def nome_idioma(idioma: str) -> str:
+    info = IDIOMAS.get(idioma)
+    return info["nome"] if info else idioma
+
+
+def casa_idioma(tag: str, code: str, nome: str, idioma: str) -> bool:
+    """Se um stream de legenda (por tag/código/nome) é do idioma-alvo.
+
+    Prioriza `languageTag` (ex.: 'pt-BR'→base 'pt') e `languageCode` (ex.:
+    'por'); só cai no nome quando ambos faltam (faixas embutidas às vezes vêm
+    sem código). Idioma desconhecido na tabela: casa pela base da própria tag.
+    """
+    info = IDIOMAS.get(idioma)
+    base = info["base"] if info else idioma.split("-")[0].lower()
+    codes = info["codes"] if info else ()
+    np = info["np"] if info else base
+    t = (tag or "").split("-")[0].lower()
+    if t:
+        return t == base
+    c = (code or "").lower()
+    if c:
+        return c == base or c in codes
+    return bool(np) and np in (nome or "").lower()
+
+
 # Marca de episódio (S01E02 ou 1x02): tudo antes dela no nome do arquivo é o
 # nome da série, usado para descartar candidato de OUTRA série.
 _MARCADOR_EP = re.compile(r"[\s._-](S\d{1,2}E\d{1,3}|\d{1,2}x\d{1,3})", re.I)
@@ -204,14 +244,15 @@ class Plex:
                                   s.get("selected") == "1"))
         return saida
 
-    def tem_idioma(self, ep_rk: str, prefixo: str) -> bool:
-        """Se já existe legenda cujo idioma começa com `prefixo` (ex.: 'Portugu')."""
-        return any(prefixo.lower() in idi.lower()
-                   for _sid, idi, _sel in self.legendas_do_episodio(ep_rk))
+    def tem_idioma(self, ep_rk: str, idioma: str) -> bool:
+        """Se já existe legenda no idioma-alvo (detecção por tag/código/nome)."""
+        return any(casa_idioma(s["tag"], s["code"], s["lang"], idioma)
+                   for s in self.streams_legenda(ep_rk))
 
     def streams_legenda(self, ep_rk: str) -> list[dict]:
-        """Legendas do episódio com origem: idioma, se é embutida (no arquivo de
-        vídeo, sem `key`) e se veio de provedor. Uma chamada, para varreduras."""
+        """Legendas do episódio com origem: idioma (nome + tag + código), se é
+        embutida (no arquivo de vídeo, sem `key`) e se veio de provedor. Uma
+        chamada, para varreduras."""
         r = self._req(f"/library/metadata/{ep_rk}")
         if r is None:
             return []
@@ -220,11 +261,13 @@ class Plex:
             for s in p.iter("Stream"):
                 if s.get("streamType") == "3":
                     out.append({"lang": s.get("language") or "",
+                                "tag": s.get("languageTag") or "",
+                                "code": s.get("languageCode") or "",
                                 "embutida": not s.get("key"),
                                 "provedor": bool(s.get("providerTitle"))})
         return out
 
-    def afinidade_atual(self, ep_rk: str, arquivo: str, prefixo: str) -> int:
+    def afinidade_atual(self, ep_rk: str, arquivo: str, idioma: str) -> int:
         """Maior afinidade de release entre as legendas do idioma já presentes.
 
         Usa o título do stream (que traz o release, ex.: 'The.Rookie...1080p.WEB')
@@ -237,12 +280,14 @@ class Plex:
         melhor = 0
         for p in r.iter("Part"):
             for s in p.iter("Stream"):
-                if s.get("streamType") == "3" and prefixo.lower() in (s.get("language") or "").lower():
+                if s.get("streamType") == "3" and casa_idioma(
+                        s.get("languageTag") or "", s.get("languageCode") or "",
+                        s.get("language") or "", idioma):
                     titulo = s.get("title") or s.get("extendedDisplayTitle") or ""
                     melhor = max(melhor, afinidade_release(arquivo, titulo))
         return melhor
 
-    def tem_legenda_de_provedor(self, ep_rk: str, prefixo: str) -> bool:
+    def tem_legenda_de_provedor(self, ep_rk: str, idioma: str) -> bool:
         """Se alguma legenda do idioma veio de um provedor (OpenSubtitles etc.).
 
         Legendas geradas por nós ficam como arquivo sidecar externo, sem
@@ -256,9 +301,10 @@ class Plex:
             return False
         for p in r.iter("Part"):
             for s in p.iter("Stream"):
-                if (s.get("streamType") == "3"
-                        and prefixo.lower() in (s.get("language") or "").lower()
-                        and s.get("providerTitle")):
+                if (s.get("streamType") == "3" and s.get("providerTitle")
+                        and casa_idioma(s.get("languageTag") or "",
+                                        s.get("languageCode") or "",
+                                        s.get("language") or "", idioma)):
                     return True
         return False
 
@@ -344,28 +390,29 @@ def temporadas(plex: Plex, serie_rk: str) -> list[int]:
 
 
 def episodios_status(plex: Plex, serie_rk: str, temporada: str,
-                     idioma: str, prefixo_idioma: str = "Portugu") -> Iterator[dict]:
+                     idioma: str) -> Iterator[dict]:
     """Status de cada episódio de uma temporada, para a lista interativa.
 
-    Por episódio: se tem legenda no idioma, a afinidade da atual, se tem inglês
-    embutido (traduzível) e se a legenda atual veio de provedor. Só leitura.
+    Por episódio: se tem legenda no idioma-alvo, a afinidade da atual, quais
+    idiomas há embutidos (traduzíveis) e se a legenda atual veio de provedor.
+    Só leitura.
     """
     eps = [e for e in plex.episodios(serie_rk) if e.temporada == str(temporada)]
     for i, ep in enumerate(eps, 1):
         arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
         yield _card_status(plex, ep.rating_key, f"S{ep.temporada}E{ep.numero}",
-                           ep.numero, ep.titulo, arquivo, prefixo_idioma, i, len(eps))
+                           ep.numero, ep.titulo, arquivo, idioma, i, len(eps))
 
 
 def _card_status(plex: Plex, rk: str, rotulo: str, numero: str, titulo: str,
-                 arquivo: str, prefixo_idioma: str, i: int, total: int) -> dict:
+                 arquivo: str, idioma: str, i: int, total: int) -> dict:
     """Monta o dict de status de um item (episódio ou filme) para a lista."""
     streams = plex.streams_legenda(rk)
-    tem_pt = any(prefixo_idioma.lower() in s["lang"].lower() for s in streams)
+    tem_pt = any(casa_idioma(s["tag"], s["code"], s["lang"], idioma) for s in streams)
     emb_langs = sorted({s["lang"] for s in streams if s["embutida"] and s["lang"]})
-    de_provedor = any(prefixo_idioma.lower() in s["lang"].lower() and s["provedor"]
+    de_provedor = any(casa_idioma(s["tag"], s["code"], s["lang"], idioma) and s["provedor"]
                       for s in streams)
-    afin = plex.afinidade_atual(rk, arquivo, prefixo_idioma) if tem_pt else -1
+    afin = plex.afinidade_atual(rk, arquivo, idioma) if tem_pt else -1
     return {"i": i, "total": total, "rk": rk, "ep": rotulo, "numero": numero,
             "titulo": titulo, "tem_pt": tem_pt, "afinidade": afin,
             "emb_langs": emb_langs,
@@ -373,8 +420,7 @@ def _card_status(plex: Plex, rk: str, rotulo: str, numero: str, titulo: str,
             "de_provedor": de_provedor}
 
 
-def filme_status(plex: Plex, filme_rk: str, idioma: str,
-                 prefixo_idioma: str = "Portugu") -> Iterator[dict]:
+def filme_status(plex: Plex, filme_rk: str, idioma: str) -> Iterator[dict]:
     """Status de um filme (item único, sem temporada), no mesmo formato de card."""
     r = plex._req(f"/library/metadata/{filme_rk}")
     titulo = arquivo = ""
@@ -385,12 +431,10 @@ def filme_status(plex: Plex, filme_rk: str, idioma: str,
         for p in r.iter("Part"):
             arquivo = (p.get("file") or "").rsplit("/", 1)[-1]
             break
-    yield _card_status(plex, filme_rk, "Filme", "", titulo, arquivo,
-                       prefixo_idioma, 1, 1)
+    yield _card_status(plex, filme_rk, "Filme", "", titulo, arquivo, idioma, 1, 1)
 
 
-def cobertura_serie(plex: Plex, serie_rk: str,
-                    prefixo_idioma: str = "Portugu") -> Iterator[dict]:
+def cobertura_serie(plex: Plex, serie_rk: str, idioma: str) -> Iterator[dict]:
     """Varre a série SEM baixar nada e informa quantos episódios já têm legenda.
 
     Só leitura — para o painel mostrar o estado atual antes de qualquer ação.
@@ -400,7 +444,7 @@ def cobertura_serie(plex: Plex, serie_rk: str,
     com = emb = 0
     for i, ep in enumerate(eps, 1):
         streams = plex.streams_legenda(ep.rating_key)
-        tem = any(prefixo_idioma.lower() in s["lang"].lower() for s in streams)
+        tem = any(casa_idioma(s["tag"], s["code"], s["lang"], idioma) for s in streams)
         en_emb = any(s["embutida"] and "english" in s["lang"].lower() for s in streams)
         if tem:
             com += 1
@@ -412,7 +456,6 @@ def cobertura_serie(plex: Plex, serie_rk: str,
 
 
 def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
-                    prefixo_idioma: str = "Portugu",
                     reavaliar: bool = False,
                     so_existentes: bool = False,
                     temporada: str = "") -> Iterator[dict]:
@@ -436,11 +479,11 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
     for i, ep in enumerate(eps, 1):
         arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
         streams = plex.streams_legenda(ep.rating_key)
-        ja_tem = any(prefixo_idioma.lower() in s["lang"].lower() for s in streams)
+        ja_tem = any(casa_idioma(s["tag"], s["code"], s["lang"], idioma) for s in streams)
         en_emb = any(s["embutida"] and "english" in s["lang"].lower() for s in streams)
         base = {"i": i, "total": len(eps), "rk": ep.rating_key, "en_emb": en_emb,
                 "ep": f"S{ep.temporada}E{ep.numero}", "titulo": ep.titulo}
-        atual = plex.afinidade_atual(ep.rating_key, arquivo, prefixo_idioma) if ja_tem else -1
+        atual = plex.afinidade_atual(ep.rating_key, arquivo, idioma) if ja_tem else -1
         if ja_tem and not reavaliar:
             yield {**base, "estado": "ja_tinha"}
             continue
@@ -449,7 +492,7 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
             continue
         # Nunca substitui legenda que não veio de provedor (tradução/embutida
         # nossa, sidecar externo): reavaliar só reconsidera downloads de provedor.
-        if ja_tem and reavaliar and not plex.tem_legenda_de_provedor(ep.rating_key, prefixo_idioma):
+        if ja_tem and reavaliar and not plex.tem_legenda_de_provedor(ep.rating_key, idioma):
             yield {**base, "estado": "protegida"}
             continue
 
