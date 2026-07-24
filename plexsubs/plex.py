@@ -91,9 +91,11 @@ def casa_idioma(tag: str, code: str, nome: str, idioma: str) -> bool:
     base = info["base"] if info else idioma.split("-")[0].lower()
     codes = info["codes"] if info else ()
     np = info["np"] if info else base
+    # languageTag costuma ser 2 letras ('en', 'pt-BR'), mas legenda baixada às
+    # vezes vem com 3 ('eng'); aceita ambos.
     t = (tag or "").split("-")[0].lower()
     if t:
-        return t == base
+        return t == base or t in codes
     c = (code or "").lower()
     if c:
         return c == base or c in codes
@@ -419,6 +421,42 @@ class Plex:
         """
         self._req(f"/library/metadata/{ep_rk}/subtitles", metodo="PUT",
                   key=f"/library/streams/{stream_id}")
+
+    def conteudo_stream(self, stream_id: str) -> bytes:
+        """Texto (SRT) de uma legenda externa/baixada, direto por HTTP — sem
+        precisar ler o blob no banco do Plex."""
+        alvo = f"{self.url}/library/streams/{stream_id}?download=1&X-Plex-Token={self.token}"
+        with urllib.request.urlopen(alvo, timeout=self.timeout) as f:
+            return f.read()
+
+    def id_legenda_externa(self, ep_rk: str, idioma: str) -> str | None:
+        """id da legenda EXTERNA (baixada, tem `key`) no idioma — para buscar o
+        conteúdo via `conteudo_stream`. None se não houver."""
+        r = self._req(f"/library/metadata/{ep_rk}")
+        if r is None:
+            return None
+        for p in r.iter("Part"):
+            for s in p.iter("Stream"):
+                if (s.get("streamType") == "3" and s.get("key") and casa_idioma(
+                        s.get("languageTag") or "", s.get("languageCode") or "",
+                        s.get("language") or "", idioma)):
+                    return s.get("id")
+        return None
+
+    def part_do_episodio(self, ep_rk: str) -> str | None:
+        r = self._req(f"/library/metadata/{ep_rk}")
+        if r is None:
+            return None
+        for p in r.iter("Part"):
+            return p.get("id")
+        return None
+
+    def definir_legenda_padrao(self, part_id: str, stream_id: str) -> None:
+        """Fixa a legenda default (selected=1) de uma part."""
+        alvo = (f"{self.url}/library/parts/{part_id}"
+                f"?subtitleStreamID={stream_id}&X-Plex-Token={self.token}")
+        req = urllib.request.Request(alvo, method="PUT")
+        urllib.request.urlopen(req, timeout=self.timeout).close()
 
 
 def temporadas(plex: Plex, serie_rk: str) -> list[int]:
