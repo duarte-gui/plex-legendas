@@ -126,17 +126,18 @@ def traduzir_srt_completo(srt: bytes, **kw) -> bytes:
 
 def traduzir_episodio(plex, ep_rk: str, idioma_alvo: str = "pt-BR",
                       idioma_nome: str = "Português do Brasil",
-                      tokens_serie=None, **kw) -> dict:
+                      tokens_serie=None, forcar: bool = False, **kw) -> dict:
     """Garante uma legenda inglesa no episódio, baixa o texto, traduz e devolve
     o SRT no idioma-alvo. NÃO sobe nada — o chamador decide (Bazarr/Plex).
 
     Não faz busca de provedor do Bazarr (sem cota): a inglesa vem do download do
-    Plex. Devolve {estado, srt?, bytes?}. Estados: ja_tem, sem_ingles,
-    falha_download, traduzida.
+    Plex. `forcar=True` traduz mesmo que já exista legenda no idioma-alvo (para
+    substituir uma dessincronizada). Devolve {estado, srt?, bytes?}. Estados:
+    ja_tem, sem_ingles, falha_download, traduzida.
     """
     from .plex import casa_idioma
     streams = plex.streams_legenda(ep_rk)
-    if any(casa_idioma(s["tag"], s["code"], s["lang"], idioma_alvo) for s in streams):
+    if not forcar and any(casa_idioma(s["tag"], s["code"], s["lang"], idioma_alvo) for s in streams):
         return {"estado": "ja_tem"}
 
     en_id = plex.id_legenda_externa(ep_rk, "en")
