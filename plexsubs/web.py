@@ -103,6 +103,12 @@ PAGINA = """<!doctype html>
   .cand .met b { color:var(--ok) }
   .cand.outra { opacity:.7 } .cand.outra .rel { color:var(--tenue) }
   .cand .warn { color:var(--erro); font-weight:600 }
+  .modal-nav { display:flex; align-items:center; gap:.4rem }
+  .modal-nav button { padding:.35rem .7rem; font-size:.82rem }
+  #modal-pos { font-size:.8rem; color:var(--tenue); min-width:4.5rem; text-align:center }
+  .modal-auto { display:flex; align-items:center; gap:.4rem; margin-top:.9rem;
+                font-size:.82rem; text-transform:none; letter-spacing:0; color:var(--suave) }
+  .modal-auto input { min-width:auto }
   footer { color:var(--tenue); font-size:.78rem; border-top:1px solid var(--linha); padding-top:.9rem }
   code { font-family:var(--mono); font-size:.85em }
 </style></head><body>
@@ -134,10 +140,19 @@ PAGINA = """<!doctype html>
 
   <div id="modal" class="modal" hidden>
     <div class="modal-cx">
-      <div class="modal-hd"><span id="modal-tit">Escolher legenda</span>
-        <button id="modal-x" class="sec">fechar</button></div>
+      <div class="modal-hd">
+        <span id="modal-tit">Escolher legenda</span>
+        <span class="modal-nav">
+          <button id="modal-prev" class="sec">‹ anterior</button>
+          <span id="modal-pos"></span>
+          <button id="modal-next" class="sec">próximo ›</button>
+          <button id="modal-x" class="sec">fechar</button>
+        </span>
+      </div>
       <div id="modal-arq" class="modal-arq"></div>
       <div id="modal-lista"></div>
+      <label class="modal-auto"><input type="checkbox" id="modal-avanca" checked>
+        avançar para o próximo ao aplicar</label>
     </div>
   </div>
 
@@ -177,11 +192,12 @@ async function carregarTemporadas(serie){
 
 // ---- 3) episódios da temporada (lista interativa) ----
 let epToken=0;
+let episodiosAtuais=[];   // ordem da temporada, para navegar no seletor
 async function carregarEpisodios(){
   const serie=$('#serie').value, temp=$('#temp').value;
   if(!temp) return;
   const meu=++epToken;
-  const grade=$('#grade'); grade.innerHTML='';
+  const grade=$('#grade'); grade.innerHTML=''; episodiosAtuais=[];
   const box=$('#resumo-cob'); box.className='cob ativo'; box.textContent='carregando episódios…';
   let com=0, emb=0, total=0;
   try{
@@ -194,7 +210,8 @@ async function carregarEpisodios(){
       const partes=resto.split('\\n'); resto=partes.pop();
       for(const p of partes) if(p.trim()){ try{ const d=JSON.parse(p);
         total=d.total; if(d.tem_pt) com++; if(d.en_emb) emb++;
-        grade.appendChild(cardEpisodio(d)); $('#pi').style.width=(100*d.i/d.total)+'%';
+        const card=cardEpisodio(d); grade.appendChild(card);
+        episodiosAtuais.push({rk:d.rk, ep:d.ep, card}); $('#pi').style.width=(100*d.i/d.total)+'%';
       }catch(e){} }
     }
     box.className='cob '+(com<total?'parcial':'ok');
@@ -223,19 +240,31 @@ function cardEpisodio(d){
   el.querySelector('.ctit').textContent=d.titulo||d.ep;
   if(en){ const s=document.createElement('span'); s.className='badge-en'; s.textContent='EN';
           s.title='tem legenda em inglês embutida (traduzível)'; el.querySelector('.ctit').appendChild(s); }
-  el.onclick=()=>abrirSeletor(d.rk, d.ep, el);
+  el.onclick=()=>abrirIdx(episodiosAtuais.findIndex(x=>x.rk===d.rk));
   return el;
 }
 
-// ---- seletor manual de legenda por episódio ----
-async function abrirSeletor(rk, rotulo, card){
-  $('#modal-tit').textContent='Escolher legenda · '+rotulo;
+// ---- seletor manual, com navegação episódio a episódio ----
+let idxAtual=-1;
+function abrirIdx(idx){
+  if(idx<0 || idx>=episodiosAtuais.length) return;
+  idxAtual=idx;
+  const e=episodiosAtuais[idx];
+  $('#modal-pos').textContent=`${idx+1} de ${episodiosAtuais.length}`;
+  $('#modal-prev').disabled = idx===0;
+  $('#modal-next').disabled = idx===episodiosAtuais.length-1;
+  $('#modal-tit').textContent='Legenda · '+e.ep;
   $('#modal-arq').textContent='consultando candidatos…';
   $('#modal-lista').innerHTML=''; $('#modal').hidden=false;
+  carregarCandidatos(e);
+}
+async function carregarCandidatos(e){
   try{
-    const d=await (await fetch(`api/candidatos?ep=${rk}`)).json();
+    const d=await (await fetch(`api/candidatos?ep=${e.rk}`)).json();
+    if(e!==episodiosAtuais[idxAtual]) return;   // já navegou para outro
     $('#modal-arq').textContent=d.arquivo||'';
-    if(!d.candidatos.length){ $('#modal-lista').innerHTML='<p>Nenhum candidato para este episódio.</p>'; return; }
+    const lista=$('#modal-lista'); lista.innerHTML='';
+    if(!d.candidatos.length){ lista.innerHTML='<p>Nenhum candidato para este episódio.</p>'; return; }
     for(const c of d.candidatos){
       const row=document.createElement('div'); row.className='cand'+(c.mesma_serie?'':' outra');
       const aviso=c.mesma_serie?'':' <span class="warn">⚠ outra série</span>';
@@ -245,21 +274,29 @@ async function abrirSeletor(rk, rotulo, card){
       row.querySelector('.rel').textContent=c.titulo;
       row.querySelector('.apl').onclick=async()=>{
         row.querySelector('.apl').textContent='aplicando…';
-        const jj=await (await fetch(`api/aplicar?ep=${rk}&stream=${encodeURIComponent(c.stream)}`,{method:'POST'})).json();
-        if(jj.ok){ atualizarCard(card,c); $('#modal').hidden=true; }
-        else row.querySelector('.apl').textContent='falhou';
+        const jj=await (await fetch(`api/aplicar?ep=${e.rk}&stream=${encodeURIComponent(c.stream)}`,{method:'POST'})).json();
+        if(jj.ok){ atualizarCard(e.card,c);
+          if($('#modal-avanca').checked && idxAtual<episodiosAtuais.length-1) abrirIdx(idxAtual+1);
+          else $('#modal').hidden=true;
+        } else row.querySelector('.apl').textContent='falhou';
       };
-      $('#modal-lista').appendChild(row);
+      lista.appendChild(row);
     }
-  }catch(e){ $('#modal-arq').textContent='falha ao consultar candidatos'; }
+  }catch(e2){ $('#modal-arq').textContent='falha ao consultar candidatos'; }
 }
 function atualizarCard(card,c){
   if(!card) return;
   card.className='card '+(c.afinidade>=2?'tem':'fraca');
   card.querySelector('.csub').innerHTML=`<span class="pill ${c.afinidade>=2?'ok':'wa'}">aplicada · afinidade ${c.afinidade}</span>${c.titulo}`;
 }
+$('#modal-prev').onclick=()=>abrirIdx(idxAtual-1);
+$('#modal-next').onclick=()=>abrirIdx(idxAtual+1);
 $('#modal-x').onclick=()=>$('#modal').hidden=true;
 $('#modal').addEventListener('click',e=>{ if(e.target.id==='modal') $('#modal').hidden=true; });
+document.addEventListener('keydown',e=>{ if($('#modal').hidden) return;
+  if(e.key==='ArrowRight') abrirIdx(idxAtual+1);
+  else if(e.key==='ArrowLeft') abrirIdx(idxAtual-1);
+  else if(e.key==='Escape') $('#modal').hidden=true; });
 
 // ---- buscar (automático) na temporada selecionada ----
 function marcaCard(card, d){
