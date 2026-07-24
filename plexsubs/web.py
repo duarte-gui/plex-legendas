@@ -271,13 +271,17 @@ async function carregarCandidatos(e){
         +`<div class="met">afinidade <b>${c.afinidade}</b> · score ${c.score} · ${c.provedor||''}${aviso}</div></div>`
         +`<button class="apl">Aplicar</button>`;
       row.querySelector('.rel').textContent=c.titulo;
-      row.querySelector('.apl').onclick=async()=>{
-        row.querySelector('.apl').textContent='aplicando…';
-        const jj=await (await fetch(`api/aplicar?ep=${e.rk}&stream=${encodeURIComponent(c.stream)}`,{method:'POST'})).json();
-        if(jj.ok){ atualizarCard(e.card,c);
-          if($('#modal-avanca').checked && idxAtual<episodiosAtuais.length-1) abrirIdx(idxAtual+1);
-          else $('#modal').hidden=true;
-        } else row.querySelector('.apl').textContent='falhou';
+      const btn=row.querySelector('.apl');
+      btn.onclick=async()=>{
+        btn.textContent='aplicando…'; btn.disabled=true;
+        try{
+          const rr=await fetch(`api/aplicar?ep=${e.rk}&stream=${encodeURIComponent(c.stream)}`);
+          const jj=await rr.json();
+          if(jj.ok){ atualizarCard(e.card,c);
+            if($('#modal-avanca').checked && idxAtual<episodiosAtuais.length-1) abrirIdx(idxAtual+1);
+            else $('#modal').hidden=true;
+          } else { btn.textContent='falhou'; btn.disabled=false; }
+        }catch(err){ btn.textContent='erro'; btn.disabled=false; }
       };
       lista.appendChild(row);
     }
