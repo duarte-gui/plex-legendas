@@ -122,10 +122,13 @@ PAGINA = """<!doctype html>
   </header>
 
   <div class="barra">
+    <label>Biblioteca
+      <select id="lib"><option>…</option></select>
+    </label>
     <label>Série
       <select id="serie"><option>carregando…</option></select>
     </label>
-    <label>Temporada
+    <label id="lbl-temp">Temporada
       <select id="temp"><option>—</option></select>
     </label>
     <label>Score mínimo
@@ -179,21 +182,38 @@ function codigoIdioma(lang){
   return (lang||'??').slice(0,2).toUpperCase();
 }
 
-// ---- 1) séries ----
-fetch('api/series').then(r=>r.json()).then(ss=>{
-  const sel = $('#serie'); sel.innerHTML='';
-  for (const s of ss) {
-    const o=document.createElement('option');
-    o.value=s.rating_key; o.textContent=`${s.titulo}  ·  ${s.biblioteca}`;
-    sel.appendChild(o);
-  }
-  if (ss.length) carregarTemporadas(sel.value);
-}).catch(()=> $('#serie').innerHTML='<option>falha ao consultar o Plex</option>');
+// ---- 0) bibliotecas (Séries / Animes / Filmes) ----
+fetch('api/bibliotecas').then(r=>r.json()).then(ls=>{
+  const sel=$('#lib'); sel.innerHTML='';
+  for(const l of ls){ const o=document.createElement('option');
+    o.value=l.key; o.dataset.tipo=l.tipo; o.textContent=l.titulo; sel.appendChild(o); }
+  if(ls.length) carregarSeries(sel.value);
+}).catch(()=> $('#lib').innerHTML='<option>falha</option>');
 
-// ---- 2) temporadas da série ----
+// tipo (show/movie) da série selecionada — governa se há temporada
+function serieTipo(){ const o=$('#serie').selectedOptions[0]; return o?o.dataset.tipo:'show'; }
+
+// ---- 1) séries da biblioteca escolhida ----
+function carregarSeries(lib){
+  const sel=$('#serie'); sel.innerHTML='<option>carregando…</option>';
+  fetch('api/series?lib='+encodeURIComponent(lib)).then(r=>r.json()).then(ss=>{
+    sel.innerHTML='';
+    for(const s of ss){ const o=document.createElement('option');
+      o.value=s.rating_key; o.dataset.tipo=s.tipo||'show'; o.textContent=s.titulo;
+      sel.appendChild(o); }
+    if(ss.length) carregarTemporadas(sel.value);
+    else { $('#serie').innerHTML='<option>vazia</option>'; $('#grade').innerHTML=''; }
+  }).catch(()=> sel.innerHTML='<option>falha ao consultar o Plex</option>');
+}
+
+// ---- 2) temporadas da série (filme não tem: vai direto ao item) ----
 async function carregarTemporadas(serie){
-  const sel=$('#temp'); sel.innerHTML='<option>…</option>';
+  const filme=serieTipo()==='movie';
+  $('#lbl-temp').style.display=filme?'none':'';
+  $('#ir').style.display=filme?'none':'';   // busca em lote é por temporada
   $('#grade').innerHTML=''; $('#resumo-cob').textContent='';
+  if(filme){ carregarEpisodios(); return; }
+  const sel=$('#temp'); sel.innerHTML='<option>…</option>';
   try{
     const ts = await (await fetch(`api/temporadas?serie=${serie}`)).json();
     sel.innerHTML='';
@@ -207,18 +227,19 @@ async function carregarTemporadas(serie){
 let epToken=0;
 let episodiosAtuais=[];   // ordem da temporada, para navegar no seletor
 async function carregarEpisodios(){
-  const serie=$('#serie').value, temp=$('#temp').value;
+  const serie=$('#serie').value, temp=$('#temp').value, filme=serieTipo()==='movie';
   const capa=$('#capa');
   if(serie){ capa.hidden=false; capa.src='api/capa?rk='+encodeURIComponent(serie);
              capa.onerror=()=>{capa.hidden=true;}; }
   else capa.hidden=true;
-  if(!temp) return;
+  if(!serie || (!filme && !temp)) return;
   const meu=++epToken;
   const grade=$('#grade'); grade.innerHTML=''; episodiosAtuais=[];
-  const box=$('#resumo-cob'); box.className='cob ativo'; box.textContent='carregando episódios…';
+  const box=$('#resumo-cob'); box.className='cob ativo'; box.textContent=filme?'carregando filme…':'carregando episódios…';
   let com=0, total=0; const embSet=new Set();
   try{
-    const r=await fetch(`api/episodios?serie=${serie}&temporada=${temp}`);
+    const url=filme?`api/episodios?serie=${serie}&tipo=movie`:`api/episodios?serie=${serie}&temporada=${temp}`;
+    const r=await fetch(url);
     const leitor=r.body.getReader(); const dec=new TextDecoder(); let resto='';
     while(true){
       const {done,value}=await leitor.read(); if(done) break;
@@ -233,7 +254,7 @@ async function carregarEpisodios(){
     }
     box.className='cob '+(com<total?'parcial':'ok');
     const embs=[...embSet].sort();
-    box.textContent=`Temporada ${temp}: ${com} de ${total} com legenda`
+    box.textContent=(filme?`${com} de ${total} com legenda`:`Temporada ${temp}: ${com} de ${total} com legenda`)
       +(com<total?` · ${total-com} sem`:' · completa ✓')
       +(embs.length?` · legenda embutida no arquivo: ${embs.join(', ')}`:'');
     $('#pi').style.width='0';
@@ -362,6 +383,7 @@ async function buscarTemporada(){
   } finally { $('#ir').disabled=false; $('#ir').textContent='Buscar nesta temporada'; }
 }
 
+$('#lib').addEventListener('change',()=>carregarSeries($('#lib').value));
 $('#serie').addEventListener('change',()=>carregarTemporadas($('#serie').value));
 $('#temp').addEventListener('change',carregarEpisodios);
 $('#ir').onclick=buscarTemporada;
@@ -400,8 +422,16 @@ class Handler(BaseHTTPRequestHandler):
                              "Defina BAZARR_URL e BAZARR_APIKEY para habilitar"))
             return self._envia(html.encode())
 
+        if rota == "/api/bibliotecas":
+            libs = [{"key": k, "tipo": t, "titulo": nome}
+                    for k, t, nome in self.plex.bibliotecas(("show", "movie"))]
+            # séries/animes primeiro, filmes depois; alfabético dentro de cada grupo
+            libs.sort(key=lambda l: (l["tipo"] != "show", l["titulo"].lower()))
+            return self._envia(json.dumps(libs).encode(), "application/json")
+
         if rota == "/api/series":
-            dados = [s.__dict__ for s in self.plex.series()]
+            lib = (q.get("lib") or [""])[0] or None
+            dados = [s.__dict__ for s in self.plex.series(lib)]
             return self._envia(json.dumps(dados).encode(), "application/json")
 
         if rota == "/api/processar":
@@ -441,14 +471,17 @@ class Handler(BaseHTTPRequestHandler):
         self._envia(b"nao encontrado", "text/plain", 404)
 
     def _fluxo_episodios(self, q):
-        from .plex import episodios_status
+        from .plex import episodios_status, filme_status
         serie = (q.get("serie") or [""])[0]
         temp = (q.get("temporada") or [""])[0]
-        if not serie or not temp:
+        tipo = (q.get("tipo") or [""])[0]
+        if not serie or (tipo != "movie" and not temp):
             return self._envia(b"informe serie e temporada", "text/plain", 400)
         self._abre_fluxo()
         try:
-            for evt in episodios_status(self.plex, serie, temp, self.cfg.idioma):
+            eventos = (filme_status(self.plex, serie, self.cfg.idioma) if tipo == "movie"
+                       else episodios_status(self.plex, serie, temp, self.cfg.idioma))
+            for evt in eventos:
                 self._emite(evt)
         except Exception as e:  # noqa: BLE001
             self._emite({"erro": str(e)})

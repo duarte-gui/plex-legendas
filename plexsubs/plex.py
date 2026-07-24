@@ -24,6 +24,7 @@ class Serie:
     rating_key: str
     titulo: str
     biblioteca: str
+    tipo: str = "show"   # "show" (série/anime) ou "movie" (filme)
 
 
 @dataclass
@@ -144,23 +145,37 @@ class Plex:
 
     # ---------- consultas ----------
 
-    def bibliotecas(self) -> list[tuple[str, str, str]]:
-        """[(key, tipo, titulo)] — só as de série."""
+    def bibliotecas(self, tipos: tuple[str, ...] = ("show",)) -> list[tuple[str, str, str]]:
+        """[(key, tipo, titulo)] das bibliotecas cujos tipos casam (padrão: séries)."""
         r = self._req("/library/sections")
         if r is None:
             return []
         return [(d.get("key"), d.get("type"), d.get("title"))
-                for d in r.iter("Directory") if d.get("type") == "show"]
+                for d in r.iter("Directory") if d.get("type") in tipos]
 
-    def series(self) -> list[Serie]:
+    def series(self, lib_key: str | None = None) -> list[Serie]:
+        """Itens de uma biblioteca. Sem `lib_key`: todas as de série (comportamento
+        antigo). Com `lib_key`: só aquela — pode ser de filmes (itens avulsos)."""
+        libs = self.bibliotecas(("show", "movie"))
+        if lib_key:
+            libs = [l for l in libs if l[0] == str(lib_key)]
+        else:
+            libs = [l for l in libs if l[1] == "show"]
         saida: list[Serie] = []
-        for key, _tipo, nome_lib in self.bibliotecas():
+        for key, tipo, nome_lib in libs:
             r = self._req(f"/library/sections/{key}/all")
             if r is None:
                 continue
-            for d in r.iter("Directory"):
-                if d.get("ratingKey"):
-                    saida.append(Serie(d.get("ratingKey"), d.get("title") or "?", nome_lib))
+            if tipo == "movie":
+                for v in r.iter("Video"):
+                    if v.get("ratingKey"):
+                        saida.append(Serie(v.get("ratingKey"), v.get("title") or "?",
+                                           nome_lib, "movie"))
+            else:
+                for d in r.iter("Directory"):
+                    if d.get("ratingKey"):
+                        saida.append(Serie(d.get("ratingKey"), d.get("title") or "?",
+                                           nome_lib, "show"))
         return sorted(saida, key=lambda s: s.titulo.lower())
 
     def episodios(self, serie_rk: str) -> list[Episodio]:
@@ -338,18 +353,40 @@ def episodios_status(plex: Plex, serie_rk: str, temporada: str,
     eps = [e for e in plex.episodios(serie_rk) if e.temporada == str(temporada)]
     for i, ep in enumerate(eps, 1):
         arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
-        streams = plex.streams_legenda(ep.rating_key)
-        tem_pt = any(prefixo_idioma.lower() in s["lang"].lower() for s in streams)
-        emb_langs = sorted({s["lang"] for s in streams if s["embutida"] and s["lang"]})
-        de_provedor = any(prefixo_idioma.lower() in s["lang"].lower() and s["provedor"]
-                          for s in streams)
-        afin = plex.afinidade_atual(ep.rating_key, arquivo, prefixo_idioma) if tem_pt else -1
-        yield {"i": i, "total": len(eps), "rk": ep.rating_key,
-               "ep": f"S{ep.temporada}E{ep.numero}", "numero": ep.numero,
-               "titulo": ep.titulo, "tem_pt": tem_pt, "afinidade": afin,
-               "emb_langs": emb_langs,
-               "en_emb": any("english" in l.lower() for l in emb_langs),
-               "de_provedor": de_provedor}
+        yield _card_status(plex, ep.rating_key, f"S{ep.temporada}E{ep.numero}",
+                           ep.numero, ep.titulo, arquivo, prefixo_idioma, i, len(eps))
+
+
+def _card_status(plex: Plex, rk: str, rotulo: str, numero: str, titulo: str,
+                 arquivo: str, prefixo_idioma: str, i: int, total: int) -> dict:
+    """Monta o dict de status de um item (episódio ou filme) para a lista."""
+    streams = plex.streams_legenda(rk)
+    tem_pt = any(prefixo_idioma.lower() in s["lang"].lower() for s in streams)
+    emb_langs = sorted({s["lang"] for s in streams if s["embutida"] and s["lang"]})
+    de_provedor = any(prefixo_idioma.lower() in s["lang"].lower() and s["provedor"]
+                      for s in streams)
+    afin = plex.afinidade_atual(rk, arquivo, prefixo_idioma) if tem_pt else -1
+    return {"i": i, "total": total, "rk": rk, "ep": rotulo, "numero": numero,
+            "titulo": titulo, "tem_pt": tem_pt, "afinidade": afin,
+            "emb_langs": emb_langs,
+            "en_emb": any("english" in l.lower() for l in emb_langs),
+            "de_provedor": de_provedor}
+
+
+def filme_status(plex: Plex, filme_rk: str, idioma: str,
+                 prefixo_idioma: str = "Portugu") -> Iterator[dict]:
+    """Status de um filme (item único, sem temporada), no mesmo formato de card."""
+    r = plex._req(f"/library/metadata/{filme_rk}")
+    titulo = arquivo = ""
+    if r is not None:
+        for v in r.iter("Video"):
+            titulo = v.get("title") or ""
+            break
+        for p in r.iter("Part"):
+            arquivo = (p.get("file") or "").rsplit("/", 1)[-1]
+            break
+    yield _card_status(plex, filme_rk, "Filme", "", titulo, arquivo,
+                       prefixo_idioma, 1, 1)
 
 
 def cobertura_serie(plex: Plex, serie_rk: str,
