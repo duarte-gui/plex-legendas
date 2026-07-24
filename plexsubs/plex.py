@@ -116,14 +116,22 @@ def candidato_mesma_serie(tokens: list[str], titulo_candidato: str) -> bool:
     """True se o título do candidato bate com o nome da série do arquivo.
 
     Evita o caso em que o Plex casa pelo SxxExx e devolve legenda de outra série
-    (ex.: 'Mad Men' para 'Mad About You'). Exige que a maioria das palavras da
-    série apareça no título. Sem tokens para julgar, aceita (não filtra).
+    (ex.: 'Mad Men' para 'Mad About You'). Sem tokens para julgar, aceita.
+
+    A identidade da série está nas palavras DISTINTIVAS (≥4 letras): exige que a
+    maioria delas apareça no título. Palavras curtas ('yu', 'of', 'the') são
+    comuns demais para servir de prova — sem isso, 'Yu-Gi-Oh' passava por
+    'Yu Yu Hakusho' (dois 'yu' batiam). Tokens são deduplicados para o 'yu'
+    repetido não contar em dobro. Nome só de palavras curtas: usa todas.
     """
     if not tokens:
         return True
     alvo = _norm(titulo_candidato)
-    achados = sum(1 for t in tokens if t in alvo)
-    return achados / len(tokens) >= 0.6
+    unicos = set(tokens)
+    distintivos = {t for t in unicos if len(t) >= 4}
+    julgar = distintivos or unicos
+    achados = sum(1 for t in julgar if t in alvo)
+    return achados / len(julgar) >= 0.6
 
 
 def afinidade_release(arquivo: str, candidato: str) -> int:
