@@ -165,6 +165,14 @@ PAGINA = """<!doctype html>
 
 <script>
 const $ = s => document.querySelector(s);
+const MAPA_IDIOMA = {english:'EN', portugu:'PT', 'español':'ES', espanol:'ES', spanish:'ES',
+  français:'FR', francais:'FR', french:'FR', deutsch:'DE', german:'DE', italiano:'IT',
+  italian:'IT', japan:'JA', chinese:'ZH', 'português (brasil)':'PT-BR'};
+function codigoIdioma(lang){
+  const l=(lang||'').toLowerCase();
+  for(const k in MAPA_IDIOMA) if(l.includes(k)) return MAPA_IDIOMA[k];
+  return (lang||'??').slice(0,2).toUpperCase();
+}
 
 // ---- 1) séries ----
 fetch('api/series').then(r=>r.json()).then(ss=>{
@@ -199,7 +207,7 @@ async function carregarEpisodios(){
   const meu=++epToken;
   const grade=$('#grade'); grade.innerHTML=''; episodiosAtuais=[];
   const box=$('#resumo-cob'); box.className='cob ativo'; box.textContent='carregando episódios…';
-  let com=0, emb=0, total=0;
+  let com=0, total=0; const embSet=new Set();
   try{
     const r=await fetch(`api/episodios?serie=${serie}&temporada=${temp}`);
     const leitor=r.body.getReader(); const dec=new TextDecoder(); let resto='';
@@ -209,14 +217,16 @@ async function carregarEpisodios(){
       resto+=dec.decode(value,{stream:true});
       const partes=resto.split('\\n'); resto=partes.pop();
       for(const p of partes) if(p.trim()){ try{ const d=JSON.parse(p);
-        total=d.total; if(d.tem_pt) com++; if(d.en_emb) emb++;
+        total=d.total; if(d.tem_pt) com++; (d.emb_langs||[]).forEach(l=>embSet.add(codigoIdioma(l)));
         const card=cardEpisodio(d); grade.appendChild(card);
         episodiosAtuais.push({rk:d.rk, ep:d.ep, card}); $('#pi').style.width=(100*d.i/d.total)+'%';
       }catch(e){} }
     }
     box.className='cob '+(com<total?'parcial':'ok');
+    const embs=[...embSet].sort();
     box.textContent=`Temporada ${temp}: ${com} de ${total} com legenda`
-      +(com<total?` · ${total-com} sem`:' · completa ✓')+(emb?` · ${emb} com inglês embutido`:'');
+      +(com<total?` · ${total-com} sem`:' · completa ✓')
+      +(embs.length?` · legenda embutida no arquivo: ${embs.join(', ')}`:'');
     $('#pi').style.width='0';
   }catch(e){ box.textContent='falha ao carregar episódios'; box.className='cob'; }
 }
@@ -237,8 +247,11 @@ function cardEpisodio(d){
     +`<div class="cinfo"><div class="ctit"></div><div class="csub">${sub}</div></div>`
     +`<div class="cgo">›</div>`;
   el.querySelector('.ctit').textContent=d.titulo||d.ep;
-  if(d.en_emb){ const s=document.createElement('span'); s.className='badge-en'; s.textContent='EN';
-          s.title='tem legenda em inglês embutida (traduzível)'; el.querySelector('.ctit').appendChild(s); }
+  const ctit=el.querySelector('.ctit');
+  for(const lang of (d.emb_langs||[])){
+    const s=document.createElement('span'); s.className='badge-en'; s.textContent=codigoIdioma(lang);
+    s.title='legenda embutida no arquivo: '+lang; ctit.appendChild(s);
+  }
   el.onclick=()=>abrirIdx(episodiosAtuais.findIndex(x=>x.rk===d.rk));
   return el;
 }

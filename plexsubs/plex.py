@@ -319,14 +319,16 @@ def episodios_status(plex: Plex, serie_rk: str, temporada: str,
         arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
         streams = plex.streams_legenda(ep.rating_key)
         tem_pt = any(prefixo_idioma.lower() in s["lang"].lower() for s in streams)
-        en_emb = any(s["embutida"] and "english" in s["lang"].lower() for s in streams)
+        emb_langs = sorted({s["lang"] for s in streams if s["embutida"] and s["lang"]})
         de_provedor = any(prefixo_idioma.lower() in s["lang"].lower() and s["provedor"]
                           for s in streams)
         afin = plex.afinidade_atual(ep.rating_key, arquivo, prefixo_idioma) if tem_pt else -1
         yield {"i": i, "total": len(eps), "rk": ep.rating_key,
                "ep": f"S{ep.temporada}E{ep.numero}", "numero": ep.numero,
                "titulo": ep.titulo, "tem_pt": tem_pt, "afinidade": afin,
-               "en_emb": en_emb, "de_provedor": de_provedor}
+               "emb_langs": emb_langs,
+               "en_emb": any("english" in l.lower() for l in emb_langs),
+               "de_provedor": de_provedor}
 
 
 def cobertura_serie(plex: Plex, serie_rk: str,
