@@ -262,9 +262,20 @@ $('#modal-x').onclick=()=>$('#modal').hidden=true;
 $('#modal').addEventListener('click',e=>{ if(e.target.id==='modal') $('#modal').hidden=true; });
 
 // ---- buscar (automático) na temporada selecionada ----
+function marcaCard(card, d){
+  if(!card) return;
+  const sub=card.querySelector('.csub');
+  if(d.estado==='baixada'){ atualizarCard(card,{afinidade:d.afinidade??0,titulo:d.release||''}); }
+  else if(d.estado==='score_baixo'){ card.className='card fraca';
+    sub.innerHTML=`<span class="pill wa">nada bom</span>melhor score ${d.score} — abaixo do mínimo · clique para ver`; }
+  else if(d.estado==='sem_candidato'){ card.className='card';
+    sub.innerHTML='<span class="pill no">sem candidato</span>nenhuma legenda encontrada'; }
+}
 async function buscarTemporada(){
   const serie=$('#serie').value, temp=$('#temp').value, score=$('#score').value;
   $('#ir').disabled=true; $('#ir').textContent='buscando…';
+  const box=$('#resumo-cob'); box.className='cob ativo';
+  const c={baixada:0,ja_tinha:0,ja_otima:0,score_baixo:0,sem_candidato:0,erro:0};
   try{
     const r=await fetch(`api/processar?serie=${serie}&temporada=${temp}&score=${score}`);
     const leitor=r.body.getReader(); const dec=new TextDecoder(); let resto='';
@@ -273,13 +284,20 @@ async function buscarTemporada(){
       resto+=dec.decode(value,{stream:true});
       const partes=resto.split('\\n'); resto=partes.pop();
       for(const p of partes) if(p.trim()){ try{ const d=JSON.parse(p);
-        if(d.total) $('#pi').style.width=(100*d.i/d.total)+'%';
-        const card=document.querySelector(`.card[data-rk="${d.rk}"]`);
-        if(card && d.estado==='baixada') atualizarCard(card,{afinidade:d.afinidade??0,titulo:d.release||''});
+        if(d.estado in c) c[d.estado]++;
+        if(d.total){ $('#pi').style.width=(100*d.i/d.total)+'%'; box.textContent=`buscando… ${d.i}/${d.total}`; }
+        marcaCard(document.querySelector(`.card[data-rk="${d.rk}"]`), d);
       }catch(e){} }
     }
     $('#pi').style.width='0';
-  } finally { $('#ir').disabled=false; $('#ir').textContent='Buscar nesta temporada'; carregarEpisodios(); }
+    box.className='cob '+(c.baixada?'ok':'parcial');
+    let msg=`${c.baixada} baixada(s)`;
+    if(c.ja_tinha) msg+=` · ${c.ja_tinha} já tinham`;
+    if(c.score_baixo) msg+=` · ${c.score_baixo} sem legenda boa (score < ${score})`;
+    if(c.sem_candidato) msg+=` · ${c.sem_candidato} sem candidato`;
+    if(!c.baixada && c.score_baixo) msg+=' — abaixe o Score mínimo ou clique num episódio para escolher à mão';
+    box.textContent=msg;
+  } finally { $('#ir').disabled=false; $('#ir').textContent='Buscar nesta temporada'; }
 }
 
 $('#serie').addEventListener('change',()=>carregarTemporadas($('#serie').value));
