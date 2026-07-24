@@ -58,6 +58,32 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s._-]+", "", (s or "").lower())
 
 
+# Marca de episódio (S01E02 ou 1x02): tudo antes dela no nome do arquivo é o
+# nome da série, usado para descartar candidato de OUTRA série.
+_MARCADOR_EP = re.compile(r"[\s._-](S\d{1,2}E\d{1,3}|\d{1,2}x\d{1,3})", re.I)
+
+
+def serie_tokens(arquivo: str) -> list[str]:
+    """Palavras do nome da série (antes do SxxExx), para comparar com candidatos."""
+    m = _MARCADOR_EP.search(arquivo or "")
+    bruto = arquivo[:m.start()] if m else ""
+    return [t for t in re.split(r"[\s._-]+", bruto.lower()) if len(t) >= 2 and t.isalnum()]
+
+
+def candidato_mesma_serie(tokens: list[str], titulo_candidato: str) -> bool:
+    """True se o título do candidato bate com o nome da série do arquivo.
+
+    Evita o caso em que o Plex casa pelo SxxExx e devolve legenda de outra série
+    (ex.: 'Mad Men' para 'Mad About You'). Exige que a maioria das palavras da
+    série apareça no título. Sem tokens para julgar, aceita (não filtra).
+    """
+    if not tokens:
+        return True
+    alvo = _norm(titulo_candidato)
+    achados = sum(1 for t in tokens if t in alvo)
+    return achados / len(tokens) >= 0.6
+
+
 def afinidade_release(arquivo: str, candidato: str) -> int:
     """Pontua quanto o título do candidato casa com o nome do arquivo.
 
@@ -225,15 +251,20 @@ class Plex:
         r = self._req(f"/library/metadata/{ep_rk}/subtitles", language=idioma)
         if r is None:
             return []
+        tokens = serie_tokens(arquivo) if arquivo else []
         saida = []
         for s in r:
             if s.get("id") is None:
+                continue
+            titulo = s.get("title") or ""
+            # descarta candidato que é claramente de OUTRA série (o Plex casa pelo
+            # SxxExx e devolve, ex., 'Mad Men' para 'Mad About You').
+            if tokens and not candidato_mesma_serie(tokens, titulo):
                 continue
             try:
                 score = int(s.get("score") or 0)
             except ValueError:
                 score = 0
-            titulo = s.get("title") or ""
             saida.append(Candidato(s.get("id"), score, titulo,
                                    s.get("providerTitle") or "",
                                    afinidade_release(arquivo, titulo) if arquivo else 0))
