@@ -41,7 +41,8 @@ python -m plexsubs                      # interface web em http://localhost:8770
 python -m plexsubs series               # lista as séries e seus ratingKeys
 python -m plexsubs processar 3243       # processa uma série
 python -m plexsubs exportar --simular   # mostra o que seria exportado
-python -m plexsubs processar 3243 --reavaliar   # troca legendas mal casadas de execuções antigas
+python -m plexsubs processar 3243 --reavaliar                 # troca legendas mal casadas
+python -m plexsubs processar 3243 --reavaliar --so-existentes  # idem, sem preencher episódios vazios
 ```
 
 ## Como o candidato é escolhido
@@ -62,6 +63,17 @@ com o nome do arquivo, depois pela avaliação**:
 
 Se nenhum candidato casa com o arquivo (afinidade 0 para todos), a decisão
 recai sobre o mais bem votado — o comportamento antigo, como último recurso.
+
+O `--reavaliar` reconsidera episódios que já têm legenda e só troca por um
+candidato de afinidade **estritamente maior**. Duas salvaguardas o tornam seguro
+em qualquer série:
+
+- **Não toca em legenda que não veio de provedor.** Legendas geradas por outro
+  meio (tradução, extração de faixa embutida) ficam como arquivo sidecar sem
+  `providerTitle`; o `reavaliar` as protege, pois trocá-las por uma de provedor
+  poderia introduzir uma legenda mal casada.
+- **`--so-existentes`** impede preencher episódios vazios — útil para conteúdo
+  dublado que deve permanecer sem legenda.
 
 O `SCORE_MIN` (padrão 1000) segue valendo como piso: abaixo dele o candidato é
 descartado, porque uma legenda errada é pior que nenhuma. Faixas observadas:

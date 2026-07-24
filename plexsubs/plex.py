@@ -183,6 +183,26 @@ class Plex:
                     melhor = max(melhor, afinidade_release(arquivo, titulo))
         return melhor
 
+    def tem_legenda_de_provedor(self, ep_rk: str, prefixo: str) -> bool:
+        """Se alguma legenda do idioma veio de um provedor (OpenSubtitles etc.).
+
+        Legendas geradas por nós ficam como arquivo sidecar externo, sem
+        `providerTitle`. Só as baixadas de provedor têm esse campo — e são as
+        únicas que faz sentido o `reavaliar` reconsiderar. Uma legenda sidecar
+        (tradução, extração de embutida) não deve ser substituída por uma de
+        provedor, que pode estar mal casada.
+        """
+        r = self._req(f"/library/metadata/{ep_rk}")
+        if r is None:
+            return False
+        for p in r.iter("Part"):
+            for s in p.iter("Stream"):
+                if (s.get("streamType") == "3"
+                        and prefixo.lower() in (s.get("language") or "").lower()
+                        and s.get("providerTitle")):
+                    return True
+        return False
+
     # ---------- busca e download ----------
 
     def arquivo_do_episodio(self, ep_rk: str) -> str:
@@ -230,13 +250,19 @@ class Plex:
 
 def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
                     prefixo_idioma: str = "Portugu",
-                    reavaliar: bool = False) -> Iterator[dict]:
+                    reavaliar: bool = False,
+                    so_existentes: bool = False) -> Iterator[dict]:
     """Percorre a série e baixa o melhor candidato de cada episódio.
 
-    Por padrão pula episódios que já têm legenda no idioma. Com `reavaliar=True`,
-    reconsidera esses episódios: se existir um candidato com afinidade de release
-    MAIOR que a da legenda atual, baixa e passa a usá-lo (corrige legendas mal
-    casadas de execuções antigas). Nunca troca por algo de afinidade igual/menor.
+    Por padrão pula episódios que já têm legenda no idioma e baixa nos vazios.
+
+    - `reavaliar=True`: reconsidera também os que já têm legenda; se existir um
+      candidato com afinidade de release MAIOR que a atual, troca por ele (corrige
+      legendas mal casadas). Nunca troca por afinidade igual ou menor.
+    - `so_existentes=True`: nunca preenche episódios vazios — atua só sobre os que
+      já têm legenda. Combinado com `reavaliar`, torna seguro rodar em qualquer
+      série (não adiciona legenda a conteúdo dublado que deve ficar sem, nem toca
+      em legendas geradas por outro meio que estejam num episódio sem candidato).
 
     Gera um dicionário por episódio, para a interface acompanhar em tempo real.
     """
@@ -250,6 +276,14 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
         atual = plex.afinidade_atual(ep.rating_key, arquivo, prefixo_idioma) if ja_tem else -1
         if ja_tem and not reavaliar:
             yield {**base, "estado": "ja_tinha"}
+            continue
+        if not ja_tem and so_existentes:
+            yield {**base, "estado": "ignorado_vazio"}
+            continue
+        # Nunca substitui legenda que não veio de provedor (tradução/embutida
+        # nossa, sidecar externo): reavaliar só reconsidera downloads de provedor.
+        if ja_tem and reavaliar and not plex.tem_legenda_de_provedor(ep.rating_key, prefixo_idioma):
+            yield {**base, "estado": "protegida"}
             continue
 
         cands = plex.buscar(ep.rating_key, idioma, arquivo)

@@ -17,6 +17,9 @@ def main() -> int:
     pr.add_argument("--reavaliar", action="store_true",
                     help="reconsidera episódios que já têm legenda e troca por "
                          "outra de afinidade de release maior")
+    pr.add_argument("--so-existentes", action="store_true",
+                    help="não preenche episódios vazios; atua só nos que já têm "
+                         "legenda (seguro para rodar em qualquer série)")
 
     ex = sub.add_parser("exportar", help="exporta os blobs do Plex via Bazarr")
     ex.add_argument("--simular", action="store_true", help="não envia nada")
@@ -47,7 +50,7 @@ def main() -> int:
         from .plex import processar_serie
         tot = {}
         for e in processar_serie(plex, a.serie, cfg.idioma, a.score or cfg.score_min,
-                                 reavaliar=a.reavaliar):
+                                 reavaliar=a.reavaliar, so_existentes=a.so_existentes):
             tot[e["estado"]] = tot.get(e["estado"], 0) + 1
             extra = ""
             if e["estado"] == "melhorada":
