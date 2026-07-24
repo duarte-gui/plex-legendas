@@ -68,6 +68,7 @@ def _traduzir_bloco(textos: list[str], idioma_nome: str, ollama_url: str,
         "messages": [{"role": "user", "content": instr}],
         "stream": False,
         "think": False,   # crucial: desliga o "pensamento" do Qwen (senão fica 10x mais lento)
+        "keep_alive": "30m",   # mantém o modelo (21 GB) na VRAM entre episódios do lote
         "options": {"temperature": 0.3},
     }
     req = urllib.request.Request(
