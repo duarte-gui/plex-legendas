@@ -105,11 +105,17 @@ def casa_idioma(tag: str, code: str, nome: str, idioma: str) -> bool:
 _MARCADOR_EP = re.compile(r"[\s._-](S\d{1,2}E\d{1,3}|\d{1,2}x\d{1,3})", re.I)
 
 
+def _palavras(texto: str) -> list[str]:
+    """Palavras aproveitáveis de um texto (>=2 letras, alfanuméricas)."""
+    return [t for t in re.split(r"[\s._-]+", (texto or "").lower())
+            if len(t) >= 2 and t.isalnum()]
+
+
 def serie_tokens(arquivo: str) -> list[str]:
     """Palavras do nome da série (antes do SxxExx), para comparar com candidatos."""
     m = _MARCADOR_EP.search(arquivo or "")
     bruto = arquivo[:m.start()] if m else ""
-    return [t for t in re.split(r"[\s._-]+", bruto.lower()) if len(t) >= 2 and t.isalnum()]
+    return _palavras(bruto)
 
 
 def candidato_mesma_serie(tokens: list[str], titulo_candidato: str) -> bool:
@@ -339,6 +345,22 @@ class Plex:
         except urllib.error.HTTPError:
             return None
 
+    def tokens_serie(self, serie_rk: str) -> list[list[str]]:
+        """Grupos de palavras dos títulos da série (localizado E original), um
+        grupo por título — para a trava casar por QUALQUER um. Cobre arquivo em
+        pt ('Hora de Aventura') com legenda em inglês ('Adventure Time' =
+        originalTitle); juntar num grupo só diluiria o casamento."""
+        r = self._req(f"/library/metadata/{serie_rk}")
+        if r is None:
+            return []
+        d = next(iter(r.iter("Directory")), None)
+        if d is None:
+            d = next(iter(r.iter("Video")), None)
+        if d is None:
+            return []
+        grupos = [_palavras(d.get("title") or ""), _palavras(d.get("originalTitle") or "")]
+        return [g for g in grupos if g]
+
     def arquivo_do_episodio(self, ep_rk: str) -> str:
         """Nome do arquivo de vídeo do episódio (para casar o release)."""
         r = self._req(f"/library/metadata/{ep_rk}")
@@ -349,7 +371,8 @@ class Plex:
         return ""
 
     def buscar(self, ep_rk: str, idioma: str, arquivo: str = "",
-               filtrar_serie: bool = True) -> list[Candidato]:
+               filtrar_serie: bool = True,
+               tokens_serie: list[list[str]] | None = None) -> list[Candidato]:
         """Candidatos ordenados por afinidade de release e, em empate, por score.
 
         Passe `arquivo` (nome do vídeo) para priorizar a legenda que casa com o
@@ -357,17 +380,24 @@ class Plex:
         série, casou só pelo SxxExx). Com `filtrar_serie=True` (padrão, usado na
         escolha automática) os de outra série são descartados; com False eles
         vêm marcados — para a escolha manual, em que o usuário decide.
+
+        `tokens_serie` (títulos da série via `tokens_serie()`) é uma segunda
+        fonte de identidade: um candidato conta como da mesma série se casar com
+        o nome do ARQUIVO ou com o nome da SÉRIE. Isso cobre arquivo em pt e
+        legenda em inglês (ex.: 'Hora de Aventura' vs 'Adventure Time').
         """
         r = self._req(f"/library/metadata/{ep_rk}/subtitles", language=idioma)
         if r is None:
             return []
-        tokens = serie_tokens(arquivo) if arquivo else []
+        # grupos de identidade: nome do arquivo + títulos da série; casa se
+        # QUALQUER grupo bater (evita diluir juntando tudo num grupo só).
+        grupos = [g for g in ([serie_tokens(arquivo)] if arquivo else []) + (tokens_serie or []) if g]
         saida = []
         for s in r:
             if s.get("id") is None:
                 continue
             titulo = s.get("title") or ""
-            mesma = (not tokens) or candidato_mesma_serie(tokens, titulo)
+            mesma = (not grupos) or any(candidato_mesma_serie(g, titulo) for g in grupos)
             if filtrar_serie and not mesma:
                 continue
             try:
@@ -484,6 +514,7 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
     eps = plex.episodios(serie_rk)
     if temporada:
         eps = [e for e in eps if e.temporada == str(temporada)]
+    tks_serie = plex.tokens_serie(serie_rk)   # identidade da série (localizado + original)
     for i, ep in enumerate(eps, 1):
         arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
         streams = plex.streams_legenda(ep.rating_key)
@@ -504,7 +535,7 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
             yield {**base, "estado": "protegida"}
             continue
 
-        cands = plex.buscar(ep.rating_key, idioma, arquivo)
+        cands = plex.buscar(ep.rating_key, idioma, arquivo, tokens_serie=tks_serie)
         if not cands:
             yield {**base, "estado": "sem_candidato"}
             continue

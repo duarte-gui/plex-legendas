@@ -318,7 +318,7 @@ function abrirIdx(idx){
 }
 async function carregarCandidatos(e){
   try{
-    const d=await (await fetch(`api/candidatos?ep=${e.rk}`+qi())).json();
+    const d=await (await fetch(`api/candidatos?ep=${e.rk}&serie=${$('#serie').value}`+qi())).json();
     if(e!==episodiosAtuais[idxAtual]) return;   // já navegou para outro
     $('#modal-arq').textContent=d.arquivo||'';
     const lista=$('#modal-lista'); lista.innerHTML='';
@@ -523,9 +523,12 @@ class Handler(BaseHTTPRequestHandler):
         if not rk:
             return self._envia(b"informe o ep", "text/plain", 400)
         arquivo = self.plex.arquivo_do_episodio(rk)
+        serie = (q.get("serie") or [""])[0]
+        tks = self.plex.tokens_serie(serie) if serie else None
         # sem filtro de série: mostra tudo, marcando os divergentes, para o
         # usuário escolher no caso de o nome divergir.
-        cands = self.plex.buscar(rk, self._idioma(q), arquivo, filtrar_serie=False)
+        cands = self.plex.buscar(rk, self._idioma(q), arquivo, filtrar_serie=False,
+                                 tokens_serie=tks)
         dados = [{"stream": c.stream_id, "titulo": c.titulo, "score": c.score,
                   "afinidade": c.afinidade, "provedor": c.provedor,
                   "mesma_serie": c.mesma_serie} for c in cands]
