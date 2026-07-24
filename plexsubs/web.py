@@ -236,9 +236,8 @@ function cardEpisodio(d){
   el.innerHTML=`<div class="cnum">E${String(d.numero).padStart(2,'0')}</div>`
     +`<div class="cinfo"><div class="ctit"></div><div class="csub">${sub}</div></div>`
     +`<div class="cgo">›</div>`;
-  el.querySelector('.ctit').innerHTML='';
   el.querySelector('.ctit').textContent=d.titulo||d.ep;
-  if(en){ const s=document.createElement('span'); s.className='badge-en'; s.textContent='EN';
+  if(d.en_emb){ const s=document.createElement('span'); s.className='badge-en'; s.textContent='EN';
           s.title='tem legenda em inglês embutida (traduzível)'; el.querySelector('.ctit').appendChild(s); }
   el.onclick=()=>abrirIdx(episodiosAtuais.findIndex(x=>x.rk===d.rk));
   return el;
