@@ -60,6 +60,10 @@ PAGINA = """<!doctype html>
   .baixada .st { color:var(--ok) } .score_baixo .st { color:var(--alerta) }
   .erro .st,.sem_candidato .st { color:var(--erro) }
   .ja_tinha { opacity:.55 }
+  .cob { font-size:.9rem; color:var(--suave); min-height:1.3em; padding:.2rem 0 }
+  .cob.ativo { color:var(--tenue) }
+  .cob.ok { color:var(--ok); font-weight:600 }
+  .cob.parcial { color:var(--alerta); font-weight:600 }
   footer { color:var(--tenue); font-size:.78rem; border-top:1px solid var(--linha); padding-top:.9rem }
   code { font-family:var(--mono); font-size:.85em }
 </style></head><body>
@@ -77,9 +81,12 @@ PAGINA = """<!doctype html>
     <label>Score mínimo
       <input id="score" type="number" value="__SCORE__" min="0" step="100">
     </label>
+    <button id="cob" class="sec">Ver cobertura</button>
     <button id="ir">Buscar legendas</button>
     <button id="exp" class="sec" title="__EXPT__" __EXPD__>Exportar para arquivo</button>
   </div>
+
+  <div id="resumo-cob" class="cob"></div>
 
   <div class="prog"><i id="pi"></i></div>
 
@@ -111,6 +118,7 @@ fetch('api/series').then(r=>r.json()).then(ss=>{
     o.value=s.rating_key; o.textContent=`${s.titulo}  ·  ${s.biblioteca}`;
     sel.appendChild(o);
   }
+  if (ss.length) cobertura(sel.value);   // já mostra a cobertura da 1ª série
 }).catch(()=> $('#serie').innerHTML='<option>falha ao consultar o Plex</option>');
 
 function zera(){ for(const k in contagem){contagem[k]=0; $('#c-'+k).textContent='0';}
@@ -145,6 +153,34 @@ async function fluxo(url){
   } finally { $('#ir').disabled=false; $('#exp').disabled=false; }
 }
 
+// Cobertura: varre a série (sem baixar) e mostra quantos já têm legenda.
+let cobToken = 0;
+async function cobertura(serie){
+  const meu = ++cobToken;               // cancela scan anterior se trocar de série
+  const box = $('#resumo-cob');
+  box.textContent = 'consultando o Plex…'; box.className = 'cob ativo';
+  try {
+    const r = await fetch(`api/cobertura?serie=${serie}`);
+    const leitor = r.body.getReader(); const dec = new TextDecoder(); let resto='';
+    let com=0, total=0, i=0;
+    while (true) {
+      const {done, value} = await leitor.read(); if (done) break;
+      if (meu !== cobToken) { leitor.cancel(); return; }
+      resto += dec.decode(value, {stream:true});
+      const partes = resto.split('\\n'); resto = partes.pop();
+      for (const p of partes) if (p.trim()) {
+        try { const d=JSON.parse(p); com=d.com; total=d.total; i=d.i;
+              box.textContent = `escaneando… ${i}/${total} · ${com} com legenda`; } catch(e){}
+      }
+    }
+    const falta = total - com;
+    box.textContent = `${com} de ${total} episódios já têm legenda` + (falta ? ` · ${falta} sem` : ' · completo ✓');
+    box.className = 'cob ' + (falta ? 'parcial' : 'ok');
+  } catch(e){ box.textContent = 'falha ao consultar cobertura'; box.className='cob'; }
+}
+
+$('#serie').addEventListener('change', () => cobertura($('#serie').value));
+$('#cob').onclick = () => cobertura($('#serie').value);
 $('#ir').onclick = () => fluxo(`api/processar?serie=${$('#serie').value}&score=${$('#score').value}`);
 $('#exp').onclick = () => { if (confirm('Exportar as legendas do banco do Plex para arquivo, via Bazarr?')) fluxo('api/exportar'); };
 </script>
@@ -190,6 +226,9 @@ class Handler(BaseHTTPRequestHandler):
         if rota == "/api/exportar":
             return self._fluxo_exportar()
 
+        if rota == "/api/cobertura":
+            return self._fluxo_cobertura(q)
+
         self._envia(b"nao encontrado", "text/plain", 404)
 
     # ---------- respostas em fluxo (uma linha JSON por evento) ----------
@@ -215,6 +254,18 @@ class Handler(BaseHTTPRequestHandler):
         self._abre_fluxo()
         try:
             for evt in processar_serie(self.plex, serie, self.cfg.idioma, score):
+                self._emite(evt)
+        except Exception as e:  # noqa: BLE001
+            self._emite({"estado": "erro", "detalhe": str(e), "ep": ""})
+
+    def _fluxo_cobertura(self, q):
+        from .plex import cobertura_serie
+        serie = (q.get("serie") or [""])[0]
+        if not serie:
+            return self._envia(b"informe a serie", "text/plain", 400)
+        self._abre_fluxo()
+        try:
+            for evt in cobertura_serie(self.plex, serie):
                 self._emite(evt)
         except Exception as e:  # noqa: BLE001
             self._emite({"estado": "erro", "detalhe": str(e), "ep": ""})

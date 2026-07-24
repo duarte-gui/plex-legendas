@@ -23,6 +23,9 @@ o suficiente.
 1. Lista as séries do seu servidor Plex.
 2. Para cada episódio sem legenda no idioma desejado, consulta os candidatos.
 3. Aplica o de maior pontuação — **desde que passe de um mínimo configurável**.
+
+Ao selecionar uma série, o painel mostra automaticamente a **cobertura atual**
+(quantos episódios já têm legenda) — um scan só-leitura, sem baixar nada.
 4. Opcionalmente, exporta as legendas para arquivo `.srt` ao lado do vídeo.
 
 ## Instalação

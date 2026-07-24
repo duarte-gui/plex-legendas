@@ -248,6 +248,23 @@ class Plex:
                   key=f"/library/streams/{stream_id}")
 
 
+def cobertura_serie(plex: Plex, serie_rk: str,
+                    prefixo_idioma: str = "Portugu") -> Iterator[dict]:
+    """Varre a série SEM baixar nada e informa quantos episódios já têm legenda.
+
+    Só leitura — para o painel mostrar o estado atual antes de qualquer ação.
+    Gera um evento por episódio, com a contagem acumulada.
+    """
+    eps = plex.episodios(serie_rk)
+    com = 0
+    for i, ep in enumerate(eps, 1):
+        tem = plex.tem_idioma(ep.rating_key, prefixo_idioma)
+        if tem:
+            com += 1
+        yield {"i": i, "total": len(eps), "com": com,
+               "ep": f"S{ep.temporada}E{ep.numero}", "tem": tem}
+
+
 def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
                     prefixo_idioma: str = "Portugu",
                     reavaliar: bool = False,
