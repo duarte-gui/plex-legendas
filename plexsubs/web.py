@@ -52,11 +52,14 @@ PAGINA = """<!doctype html>
   .prog i { display:block; height:100%; background:var(--acento); width:0; transition:width .25s }
   .linhas { border:1px solid var(--linha); background:var(--papel);
             max-height:26rem; overflow:auto; font-family:var(--mono); font-size:.8rem }
-  .l { display:flex; gap:.7rem; padding:.32rem .7rem; border-bottom:1px solid var(--linha) }
+  .l { display:flex; gap:.7rem; padding:.32rem .7rem; border-bottom:1px solid var(--linha); align-items:baseline }
   .l:last-child { border-bottom:0 }
-  .l .ep { min-width:5.5rem; color:var(--suave) }
-  .l .st { min-width:7rem; font-weight:600 }
-  .l .de { color:var(--tenue); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .l .ep { min-width:3.4rem; color:var(--tenue); font-variant-numeric:tabular-nums }
+  .l .tit { min-width:11rem; flex:0 1 15rem; color:var(--tinta); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .l .st { min-width:6.5rem; font-weight:600 }
+  .l .de { color:var(--tenue); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 8rem }
+  .season { position:sticky; top:0; background:var(--papel); font-weight:700; font-size:.82rem;
+            letter-spacing:.03em; padding:.4rem .7rem; border-bottom:2px solid var(--acento); color:var(--acento) }
   .baixada .st { color:var(--ok) } .score_baixo .st { color:var(--alerta) }
   .erro .st,.sem_candidato .st { color:var(--erro) }
   .ja_tinha { opacity:.55 }
@@ -64,6 +67,24 @@ PAGINA = """<!doctype html>
   .cob.ativo { color:var(--tenue) }
   .cob.ok { color:var(--ok); font-weight:600 }
   .cob.parcial { color:var(--alerta); font-weight:600 }
+  .l { cursor:pointer } .l:hover { background:var(--papel) }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex;
+           align-items:center; justify-content:center; padding:1rem; z-index:10 }
+  .modal[hidden] { display:none }
+  .modal-cx { background:var(--fundo); border:1px solid var(--linha); max-width:680px;
+              width:100%; max-height:82vh; overflow:auto; padding:1.1rem }
+  .modal-hd { display:flex; justify-content:space-between; align-items:center;
+              font-weight:700; margin-bottom:.5rem }
+  .modal-arq { font-family:var(--mono); font-size:.78rem; color:var(--tenue); margin-bottom:.8rem;
+               word-break:break-all }
+  .cand { display:flex; gap:.7rem; align-items:center; padding:.5rem .3rem;
+          border-bottom:1px solid var(--linha) }
+  .cand .info { flex:1; min-width:0 }
+  .cand .rel { font-size:.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .cand .met { font-family:var(--mono); font-size:.72rem; color:var(--tenue) }
+  .cand .met b { color:var(--ok) }
+  .cand.outra { opacity:.7 } .cand.outra .rel { color:var(--tenue) }
+  .cand .warn { color:var(--erro); font-weight:600 }
   footer { color:var(--tenue); font-size:.78rem; border-top:1px solid var(--linha); padding-top:.9rem }
   code { font-family:var(--mono); font-size:.85em }
 </style></head><body>
@@ -100,6 +121,15 @@ PAGINA = """<!doctype html>
 
   <div class="linhas" id="log"></div>
 
+  <div id="modal" class="modal" hidden>
+    <div class="modal-cx">
+      <div class="modal-hd"><span id="modal-tit">Escolher legenda</span>
+        <button id="modal-x" class="sec">fechar</button></div>
+      <div id="modal-arq" class="modal-arq"></div>
+      <div id="modal-lista"></div>
+    </div>
+  </div>
+
   <footer>
     Score alto indica que a legenda corresponde ao mesmo release do arquivo — daí o
     sincronismo vir correto. Abaixo do mínimo o candidato é descartado em vez de
@@ -121,21 +151,32 @@ fetch('api/series').then(r=>r.json()).then(ss=>{
   if (ss.length) cobertura(sel.value);   // já mostra a cobertura da 1ª série
 }).catch(()=> $('#serie').innerHTML='<option>falha ao consultar o Plex</option>');
 
+let ultimaTemp = null;
 function zera(){ for(const k in contagem){contagem[k]=0; $('#c-'+k).textContent='0';}
-                 $('#log').innerHTML=''; $('#pi').style.width='0'; }
+                 $('#log').innerHTML=''; $('#pi').style.width='0'; ultimaTemp=null; }
 
 function anota(d){
   if (d.estado in contagem) { contagem[d.estado]++; $('#c-'+d.estado).textContent=contagem[d.estado]; }
-  const det = d.release ? `afinidade ${d.afinidade ?? 0} · score ${d.score} · ${d.release}`
+  const log=$('#log');
+  // cabeçalho de temporada quando muda
+  const mt=(d.ep||'').match(/S(\\d+)/i); const temp=mt?mt[1]:'?';
+  if (temp!==ultimaTemp){ ultimaTemp=temp;
+    const h=document.createElement('div'); h.className='season';
+    h.textContent='Temporada '+temp; log.appendChild(h); }
+  const num=(d.ep||'').match(/E(\\d+)/i);
+  const det = d.release ? `score ${d.score}${d.afinidade?` · afin ${d.afinidade}`:''} · ${d.release}`
             : d.score !== undefined ? `melhor score ${d.score}`
-            : d.detalhe || d.titulo || '';
+            : d.detalhe || '';
   const el=document.createElement('div');
-  el.className='l '+d.estado;
-  el.innerHTML=`<span class="ep">${d.ep||''}</span>`+
-               `<span class="st">${(d.estado||'').replace('_',' ')}</span>`+
-               `<span class="de"></span>`;
-  el.querySelector('.de').textContent=det;
-  const log=$('#log'); log.appendChild(el); log.scrollTop=log.scrollHeight;
+  el.className='l '+d.estado; el.dataset.ep=d.ep||''; el.dataset.rk=d.rk||'';
+  el.title='clique para escolher a legenda manualmente';
+  el.innerHTML=`<span class="ep"></span><span class="tit"></span>`+
+               `<span class="st"></span><span class="de"></span>`;
+  el.querySelector('.ep').textContent = num?('E'+num[1]):(d.ep||'');
+  el.querySelector('.tit').textContent = d.titulo||'';
+  el.querySelector('.st').textContent = (d.estado||'').replace('_',' ');
+  el.querySelector('.de').textContent = det;
+  log.appendChild(el); log.scrollTop=log.scrollHeight;
   if (d.total) $('#pi').style.width = (100*d.i/d.total)+'%';
 }
 
@@ -178,6 +219,50 @@ async function cobertura(serie){
     box.className = 'cob ' + (falta ? 'parcial' : 'ok');
   } catch(e){ box.textContent = 'falha ao consultar cobertura'; box.className='cob'; }
 }
+
+// ---- seletor manual de legenda por episódio ----
+let epAberto = null;
+async function abrirSeletor(rk, rotulo){
+  epAberto = rk;
+  $('#modal-tit').textContent = 'Escolher legenda · ' + rotulo;
+  $('#modal-arq').textContent = 'consultando candidatos…';
+  $('#modal-lista').innerHTML = '';
+  $('#modal').hidden = false;
+  try {
+    const r = await fetch(`api/candidatos?ep=${rk}`);
+    const d = await r.json();
+    $('#modal-arq').textContent = d.arquivo || '';
+    if (!d.candidatos.length){ $('#modal-lista').innerHTML='<p>Nenhum candidato para este episódio.</p>'; return; }
+    for (const c of d.candidatos){
+      const row=document.createElement('div'); row.className='cand'+(c.mesma_serie?'':' outra');
+      const aviso = c.mesma_serie ? '' : ' <span class="warn">⚠ outra série</span>';
+      row.innerHTML=`<div class="info"><div class="rel"></div>`+
+        `<div class="met">afinidade <b>${c.afinidade}</b> · score ${c.score} · ${c.provedor||''}${aviso}</div></div>`+
+        `<button class="apl">Aplicar</button>`;
+      row.querySelector('.rel').textContent = c.titulo;
+      row.querySelector('.apl').onclick = async () => {
+        row.querySelector('.apl').textContent='aplicando…';
+        const rr = await fetch(`api/aplicar?ep=${rk}&stream=${encodeURIComponent(c.stream)}`, {method:'POST'});
+        const jj = await rr.json();
+        if (jj.ok){ marcarAplicada(rk, c); $('#modal').hidden=true; }
+        else { row.querySelector('.apl').textContent='falhou'; }
+      };
+      $('#modal-lista').appendChild(row);
+    }
+  } catch(e){ $('#modal-arq').textContent='falha ao consultar candidatos'; }
+}
+function marcarAplicada(rk, c){
+  const l=document.querySelector(`.l[data-rk="${rk}"]`);
+  if (!l) return;
+  l.className='l baixada';
+  l.querySelector('.st').textContent='aplicada';
+  l.querySelector('.de').textContent=`manual · afin ${c.afinidade} · score ${c.score} · ${c.titulo}`;
+}
+$('#log').addEventListener('click', e => {
+  const l=e.target.closest('.l'); if (l && l.dataset.rk) abrirSeletor(l.dataset.rk, l.dataset.ep);
+});
+$('#modal-x').onclick = () => $('#modal').hidden=true;
+$('#modal').addEventListener('click', e => { if (e.target.id==='modal') $('#modal').hidden=true; });
 
 $('#serie').addEventListener('change', () => cobertura($('#serie').value));
 $('#cob').onclick = () => cobertura($('#serie').value);
@@ -229,7 +314,41 @@ class Handler(BaseHTTPRequestHandler):
         if rota == "/api/cobertura":
             return self._fluxo_cobertura(q)
 
+        if rota == "/api/candidatos":
+            return self._candidatos(q)
+
+        if rota == "/api/aplicar":
+            return self._aplicar(q)
+
         self._envia(b"nao encontrado", "text/plain", 404)
+
+    def _candidatos(self, q):
+        """Lista os candidatos de um episódio, para escolha manual no painel."""
+        rk = (q.get("ep") or [""])[0]
+        if not rk:
+            return self._envia(b"informe o ep", "text/plain", 400)
+        arquivo = self.plex.arquivo_do_episodio(rk)
+        # sem filtro de série: mostra tudo, marcando os divergentes, para o
+        # usuário escolher no caso de o nome divergir.
+        cands = self.plex.buscar(rk, self.cfg.idioma, arquivo, filtrar_serie=False)
+        dados = [{"stream": c.stream_id, "titulo": c.titulo, "score": c.score,
+                  "afinidade": c.afinidade, "provedor": c.provedor,
+                  "mesma_serie": c.mesma_serie} for c in cands]
+        self._envia(json.dumps({"arquivo": arquivo, "candidatos": dados}).encode(),
+                    "application/json")
+
+    def _aplicar(self, q):
+        """Baixa e aplica um candidato específico escolhido pelo usuário."""
+        rk = (q.get("ep") or [""])[0]
+        sid = (q.get("stream") or [""])[0]
+        if not rk or not sid:
+            return self._envia(b"informe ep e stream", "text/plain", 400)
+        try:
+            self.plex.aplicar(rk, sid)
+            self._envia(b'{"ok":true}', "application/json")
+        except Exception as e:  # noqa: BLE001
+            self._envia(json.dumps({"ok": False, "erro": str(e)}).encode(),
+                        "application/json", 500)
 
     # ---------- respostas em fluxo (uma linha JSON por evento) ----------
 

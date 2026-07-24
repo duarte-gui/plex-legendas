@@ -41,7 +41,8 @@ class Candidato:
     score: int
     titulo: str
     provedor: str
-    afinidade: int = 0   # quão bem o release casa com o arquivo (0 = nada)
+    afinidade: int = 0        # quão bem o release casa com o arquivo (0 = nada)
+    mesma_serie: bool = True   # False = título é de outra série (casou só por SxxExx)
 
 
 # Tokens de release usados para casar a legenda com o arquivo. A resolução
@@ -242,11 +243,15 @@ class Plex:
             return (p.get("file") or "").rsplit("/", 1)[-1]
         return ""
 
-    def buscar(self, ep_rk: str, idioma: str, arquivo: str = "") -> list[Candidato]:
+    def buscar(self, ep_rk: str, idioma: str, arquivo: str = "",
+               filtrar_serie: bool = True) -> list[Candidato]:
         """Candidatos ordenados por afinidade de release e, em empate, por score.
 
         Passe `arquivo` (nome do vídeo) para priorizar a legenda que casa com o
-        release. Sem ele, cai no comportamento antigo (só por score).
+        release. Cada candidato traz `mesma_serie` (False = título é de outra
+        série, casou só pelo SxxExx). Com `filtrar_serie=True` (padrão, usado na
+        escolha automática) os de outra série são descartados; com False eles
+        vêm marcados — para a escolha manual, em que o usuário decide.
         """
         r = self._req(f"/library/metadata/{ep_rk}/subtitles", language=idioma)
         if r is None:
@@ -257,9 +262,8 @@ class Plex:
             if s.get("id") is None:
                 continue
             titulo = s.get("title") or ""
-            # descarta candidato que é claramente de OUTRA série (o Plex casa pelo
-            # SxxExx e devolve, ex., 'Mad Men' para 'Mad About You').
-            if tokens and not candidato_mesma_serie(tokens, titulo):
+            mesma = (not tokens) or candidato_mesma_serie(tokens, titulo)
+            if filtrar_serie and not mesma:
                 continue
             try:
                 score = int(s.get("score") or 0)
@@ -267,10 +271,11 @@ class Plex:
                 score = 0
             saida.append(Candidato(s.get("id"), score, titulo,
                                    s.get("providerTitle") or "",
-                                   afinidade_release(arquivo, titulo) if arquivo else 0))
-        # do maior para o menor: primeiro pela correspondência com o arquivo,
-        # depois pela avaliação do Plex.
-        return sorted(saida, key=lambda c: (c.afinidade, c.score), reverse=True)
+                                   afinidade_release(arquivo, titulo) if arquivo else 0,
+                                   mesma))
+        # mesma série primeiro, depois afinidade, depois score.
+        return sorted(saida, key=lambda c: (c.mesma_serie, c.afinidade, c.score),
+                      reverse=True)
 
     def aplicar(self, ep_rk: str, stream_id: str) -> None:
         """Baixa o candidato e o aplica ao episódio.
@@ -318,7 +323,7 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
     """
     eps = plex.episodios(serie_rk)
     for i, ep in enumerate(eps, 1):
-        base = {"i": i, "total": len(eps),
+        base = {"i": i, "total": len(eps), "rk": ep.rating_key,
                 "ep": f"S{ep.temporada}E{ep.numero}", "titulo": ep.titulo}
         arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
 

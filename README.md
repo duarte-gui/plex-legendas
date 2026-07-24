@@ -26,6 +26,11 @@ o suficiente.
 
 Ao selecionar uma série, o painel mostra automaticamente a **cobertura atual**
 (quantos episódios já têm legenda) — um scan só-leitura, sem baixar nada.
+
+O resultado é agrupado **por temporada** e mostra o **nome do episódio**.
+Clicar num episódio abre um seletor manual com todos os candidatos daquele
+episódio (título, afinidade, score) — inclusive os de outra série, marcados
+com aviso — para escolher e aplicar à mão quando o automático não acertar.
 4. Opcionalmente, exporta as legendas para arquivo `.srt` ao lado do vídeo.
 
 ## Instalação
