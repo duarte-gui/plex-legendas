@@ -60,6 +60,9 @@ PAGINA = """<!doctype html>
   .l .de { color:var(--tenue); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 8rem }
   .season { position:sticky; top:0; background:var(--papel); font-weight:700; font-size:.82rem;
             letter-spacing:.03em; padding:.4rem .7rem; border-bottom:2px solid var(--acento); color:var(--acento) }
+  .badge-en { display:inline-block; font-size:.62rem; font-weight:700; letter-spacing:.05em;
+              padding:.02rem .28rem; margin-left:.35rem; border:1px solid var(--acento);
+              color:var(--acento); border-radius:2px; vertical-align:middle }
   .baixada .st { color:var(--ok) } .score_baixo .st { color:var(--alerta) }
   .erro .st,.sem_candidato .st { color:var(--erro) }
   .ja_tinha { opacity:.55 }
@@ -173,7 +176,9 @@ function anota(d){
   el.innerHTML=`<span class="ep"></span><span class="tit"></span>`+
                `<span class="st"></span><span class="de"></span>`;
   el.querySelector('.ep').textContent = num?('E'+num[1]):(d.ep||'');
-  el.querySelector('.tit').textContent = d.titulo||'';
+  el.querySelector('.tit').textContent = (d.titulo||'') + (d.en_emb?' ':'');
+  if (d.en_emb){ const b=document.createElement('span'); b.className='badge-en'; b.textContent='EN';
+                 b.title='tem legenda em inglês embutida (traduzível)'; el.querySelector('.tit').appendChild(b); }
   el.querySelector('.st').textContent = (d.estado||'').replace('_',' ');
   el.querySelector('.de').textContent = det;
   log.appendChild(el); log.scrollTop=log.scrollHeight;
@@ -203,19 +208,21 @@ async function cobertura(serie){
   try {
     const r = await fetch(`api/cobertura?serie=${serie}`);
     const leitor = r.body.getReader(); const dec = new TextDecoder(); let resto='';
-    let com=0, total=0, i=0;
+    let com=0, emb=0, total=0, i=0;
     while (true) {
       const {done, value} = await leitor.read(); if (done) break;
       if (meu !== cobToken) { leitor.cancel(); return; }
       resto += dec.decode(value, {stream:true});
       const partes = resto.split('\\n'); resto = partes.pop();
       for (const p of partes) if (p.trim()) {
-        try { const d=JSON.parse(p); com=d.com; total=d.total; i=d.i;
+        try { const d=JSON.parse(p); com=d.com; emb=d.emb; total=d.total; i=d.i;
               box.textContent = `escaneando… ${i}/${total} · ${com} com legenda`; } catch(e){}
       }
     }
     const falta = total - com;
-    box.textContent = `${com} de ${total} episódios já têm legenda` + (falta ? ` · ${falta} sem` : ' · completo ✓');
+    box.textContent = `${com} de ${total} episódios já têm legenda`
+      + (falta ? ` · ${falta} sem` : ' · completo ✓')
+      + (emb ? ` · ${emb} com inglês embutido (traduzível)` : '');
     box.className = 'cob ' + (falta ? 'parcial' : 'ok');
   } catch(e){ box.textContent = 'falha ao consultar cobertura'; box.className='cob'; }
 }

@@ -27,6 +27,9 @@ o suficiente.
 Ao selecionar uma série, o painel mostra automaticamente a **cobertura atual**
 (quantos episódios já têm legenda) — um scan só-leitura, sem baixar nada.
 
+A cobertura também informa quantos episódios têm **legenda em inglês embutida**
+(candidatos à tradução), e cada linha ganha um selo **EN** quando há.
+
 O resultado é agrupado **por temporada** e mostra o **nome do episódio**.
 Clicar num episódio abre um seletor manual com todos os candidatos daquele
 episódio (título, afinidade, score) — inclusive os de outra série, marcados

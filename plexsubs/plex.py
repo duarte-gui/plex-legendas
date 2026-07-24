@@ -194,6 +194,21 @@ class Plex:
         return any(prefixo.lower() in idi.lower()
                    for _sid, idi, _sel in self.legendas_do_episodio(ep_rk))
 
+    def streams_legenda(self, ep_rk: str) -> list[dict]:
+        """Legendas do episódio com origem: idioma, se é embutida (no arquivo de
+        vídeo, sem `key`) e se veio de provedor. Uma chamada, para varreduras."""
+        r = self._req(f"/library/metadata/{ep_rk}")
+        if r is None:
+            return []
+        out = []
+        for p in r.iter("Part"):
+            for s in p.iter("Stream"):
+                if s.get("streamType") == "3":
+                    out.append({"lang": s.get("language") or "",
+                                "embutida": not s.get("key"),
+                                "provedor": bool(s.get("providerTitle"))})
+        return out
+
     def afinidade_atual(self, ep_rk: str, arquivo: str, prefixo: str) -> int:
         """Maior afinidade de release entre as legendas do idioma já presentes.
 
@@ -294,13 +309,18 @@ def cobertura_serie(plex: Plex, serie_rk: str,
     Gera um evento por episódio, com a contagem acumulada.
     """
     eps = plex.episodios(serie_rk)
-    com = 0
+    com = emb = 0
     for i, ep in enumerate(eps, 1):
-        tem = plex.tem_idioma(ep.rating_key, prefixo_idioma)
+        streams = plex.streams_legenda(ep.rating_key)
+        tem = any(prefixo_idioma.lower() in s["lang"].lower() for s in streams)
+        en_emb = any(s["embutida"] and "english" in s["lang"].lower() for s in streams)
         if tem:
             com += 1
-        yield {"i": i, "total": len(eps), "com": com,
-               "ep": f"S{ep.temporada}E{ep.numero}", "tem": tem}
+        if en_emb:
+            emb += 1
+        yield {"i": i, "total": len(eps), "rk": ep.rating_key,
+               "ep": f"S{ep.temporada}E{ep.numero}", "titulo": ep.titulo,
+               "com": com, "emb": emb, "tem": tem, "en_emb": en_emb}
 
 
 def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
@@ -323,11 +343,12 @@ def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
     """
     eps = plex.episodios(serie_rk)
     for i, ep in enumerate(eps, 1):
-        base = {"i": i, "total": len(eps), "rk": ep.rating_key,
-                "ep": f"S{ep.temporada}E{ep.numero}", "titulo": ep.titulo}
         arquivo = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
-
-        ja_tem = plex.tem_idioma(ep.rating_key, prefixo_idioma)
+        streams = plex.streams_legenda(ep.rating_key)
+        ja_tem = any(prefixo_idioma.lower() in s["lang"].lower() for s in streams)
+        en_emb = any(s["embutida"] and "english" in s["lang"].lower() for s in streams)
+        base = {"i": i, "total": len(eps), "rk": ep.rating_key, "en_emb": en_emb,
+                "ep": f"S{ep.temporada}E{ep.numero}", "titulo": ep.titulo}
         atual = plex.afinidade_atual(ep.rating_key, arquivo, prefixo_idioma) if ja_tem else -1
         if ja_tem and not reavaliar:
             yield {**base, "estado": "ja_tinha"}
