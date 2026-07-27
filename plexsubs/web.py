@@ -100,6 +100,9 @@ PAGINA = """<!doctype html>
               width:100%; max-height:82vh; overflow:auto; padding:1.1rem }
   .modal-hd { display:flex; justify-content:space-between; align-items:center;
               font-weight:700; margin-bottom:.5rem }
+  .modal-trad { margin-top:.7rem; padding-top:.7rem; border-top:1px solid var(--linha);
+                display:flex; align-items:center; gap:.6rem; flex-wrap:wrap }
+  .trad-prog { font-size:.82rem; color:var(--suave) }
   .modal-arq { font-family:var(--mono); font-size:.78rem; color:var(--tenue); margin-bottom:.8rem;
                word-break:break-all }
   .cand { display:flex; gap:.7rem; align-items:center; padding:.5rem .3rem;
@@ -168,6 +171,10 @@ PAGINA = """<!doctype html>
       </div>
       <div id="modal-arq" class="modal-arq"></div>
       <div id="modal-lista"></div>
+      <div class="modal-trad">
+        <button id="btn-trad" class="sec">⇩ Baixar inglês e traduzir → <span id="trad-idi">pt-BR</span></button>
+        <span id="trad-prog" class="trad-prog"></span>
+      </div>
       <label class="modal-auto"><input type="checkbox" id="modal-avanca" checked>
         avançar para o próximo ao aplicar</label>
     </div>
@@ -320,8 +327,33 @@ function abrirIdx(idx){
   $('#modal-tit').textContent='Legenda · '+e.ep;
   $('#modal-arq').textContent='consultando candidatos…';
   $('#modal-lista').innerHTML=''; $('#modal').hidden=false;
+  $('#trad-idi').textContent=idiomaNome; $('#trad-prog').textContent='';
+  $('#btn-trad').disabled=false;
   carregarCandidatos(e);
 }
+async function traduzirEp(){
+  const e=episodiosAtuais[idxAtual]; if(!e) return;
+  $('#btn-trad').disabled=true; const prog=$('#trad-prog');
+  prog.textContent='iniciando…';
+  try{
+    const r=await fetch(`api/traduzir?ep=${e.rk}&serie=${$('#serie').value}`+qi());
+    const leitor=r.body.getReader(); const dec=new TextDecoder(); let resto='', ok=false;
+    while(true){
+      const {done,value}=await leitor.read(); if(done) break;
+      resto+=dec.decode(value,{stream:true});
+      const partes=resto.split('\\n'); resto=partes.pop();
+      for(const p of partes) if(p.trim()){ try{ const d=JSON.parse(p);
+        if(d.msg) prog.textContent=d.msg;
+        if(d.fase==='erro') prog.textContent='erro: '+(d.estado||d.detalhe||'falhou');
+        if(d.fase==='pronto') ok=true;
+      }catch(_){} }
+    }
+    if(ok){ prog.textContent='✓ pronto — legenda sincronizada aplicada';
+      const idx=idxAtual; setTimeout(()=>{ carregarEpisodios(); }, 400); }
+  }catch(err){ prog.textContent='falha na tradução'; }
+  finally{ $('#btn-trad').disabled=false; }
+}
+$('#btn-trad').onclick=traduzirEp;
 async function carregarCandidatos(e){
   try{
     const d=await (await fetch(`api/candidatos?ep=${e.rk}&serie=${$('#serie').value}`+qi())).json();
@@ -534,6 +566,9 @@ class Handler(BaseHTTPRequestHandler):
             self._envia(img[0], img[1])
             return
 
+        if rota == "/api/traduzir":
+            return self._fluxo_traduzir(q)
+
         if rota == "/api/candidatos":
             return self._candidatos(q)
 
@@ -564,6 +599,68 @@ class Handler(BaseHTTPRequestHandler):
         from .plex import IDIOMAS
         cod = (q.get("idioma") or [""])[0]
         return cod if cod in IDIOMAS else self.cfg.idioma
+
+    _bmap = None   # cache do mapa de episódios do Bazarr (por processo)
+
+    def _bazarr_map(self):
+        if Handler._bmap is None and self.cfg.tem_bazarr:
+            from .exportar import Bazarr
+            Handler._bmap = Bazarr(self.cfg.bazarr_url, self.cfg.bazarr_key).mapa_de_episodios()
+        return Handler._bmap or {}
+
+    def _fluxo_traduzir(self, q):
+        """Baixa a inglesa, traduz e grava a pt-BR (Bazarr) — com progresso."""
+        import time
+        import xml.etree.ElementTree as ET
+        from .plex import casa_idioma, nome_idioma
+        from .traduzir import traduzir_episodio
+        rk = (q.get("ep") or [""])[0]
+        serie = (q.get("serie") or [""])[0]
+        if not rk:
+            return self._envia(b"informe o ep", "text/plain", 400)
+        idioma = self._idioma(q)
+        tks = self.plex.tokens_serie(serie) if serie else None
+        self._abre_fluxo()
+        try:
+            self._emite({"fase": "baixando", "msg": "baixando inglês e traduzindo…"})
+            r = traduzir_episodio(self.plex, rk, idioma_alvo=idioma,
+                                  idioma_nome=nome_idioma(idioma), tokens_serie=tks, forcar=True)
+            if r["estado"] != "traduzida":
+                return self._emite({"fase": "erro", "estado": r["estado"]})
+            self._emite({"fase": "traduzido", "cues": r["cues"], "msg": f"traduzido ({r['cues']} falas), gravando…"})
+            if not self.cfg.tem_bazarr:
+                return self._emite({"fase": "sem_gravacao", "msg": "traduzido, mas Bazarr não configurado para gravar"})
+            arquivo = self.plex.arquivo_do_episodio(rk)
+            alvo = self._bazarr_map().get(arquivo)
+            if not alvo:
+                return self._emite({"fase": "sem_bazarr",
+                                    "msg": "traduzido, mas o arquivo não está no Bazarr (precisa da gravação no NAS)"})
+            from .exportar import Bazarr
+            bz = Bazarr(self.cfg.bazarr_url, self.cfg.bazarr_key)
+            code = bz.enviar(alvo[0], alvo[1], r["srt"], arquivo.rsplit(".", 1)[0] + ".srt", idioma)
+            # refresh e fixa a nova sidecar como default
+            urllib.request.urlopen(urllib.request.Request(
+                f"{self.plex.url}/library/metadata/{rk}/refresh?X-Plex-Token={self.plex.token}",
+                method="PUT"), timeout=30).close()
+            novo = None
+            for _ in range(12):
+                time.sleep(3)
+                x = ET.fromstring(urllib.request.urlopen(
+                    f"{self.plex.url}/library/metadata/{rk}?X-Plex-Token={self.plex.token}", timeout=30).read())
+                for s in x.iter("Stream"):
+                    if (s.get("streamType") == "3" and not s.get("providerTitle") and casa_idioma(
+                            s.get("languageTag") or "", s.get("languageCode") or "",
+                            s.get("language") or "", idioma)):
+                        novo = s.get("id")
+                if novo:
+                    break
+            part = self.plex.part_do_episodio(rk)
+            if part and novo:
+                self.plex.definir_legenda_padrao(part, novo)
+            self._emite({"fase": "pronto", "http": code,
+                         "msg": f"pronto — {nome_idioma(idioma)} sincronizada aplicada"})
+        except Exception as e:  # noqa: BLE001
+            self._emite({"fase": "erro", "detalhe": str(e)})
 
     def _fluxo_fonte(self, q):
         from .plex import fonte_traducao
