@@ -63,6 +63,11 @@ PAGINA = """<!doctype html>
   .badge-en { display:inline-block; font-size:.62rem; font-weight:700; letter-spacing:.05em;
               padding:.02rem .28rem; margin-left:.35rem; border:1px solid var(--acento);
               color:var(--acento); border-radius:2px; vertical-align:middle }
+  .fonte { display:inline-block; font-size:.66rem; font-weight:700; margin-left:.4rem;
+           padding:.02rem .3rem; border-radius:3px; vertical-align:middle }
+  .fonte.ok { color:var(--ok); border:1px solid var(--ok) }
+  .fonte.no { color:#fff; background:#c0392b }
+  .fonte.tem { color:var(--tenue); border:1px solid var(--linha) }
   .grade { display:flex; flex-direction:column; gap:.4rem }
   .card { display:flex; align-items:center; gap:.8rem; padding:.6rem .8rem; background:var(--papel);
           border:1px solid var(--linha); border-left:4px solid var(--linha); cursor:pointer }
@@ -138,6 +143,7 @@ PAGINA = """<!doctype html>
       <input id="score" type="number" value="__SCORE__" min="0" step="100">
     </label>
     <button id="ir">Buscar nesta temporada</button>
+    <button id="fonte" class="sec" title="Verifica, por episódio, se há inglês (embutido ou online) para traduzir — ou se só o Whisper resolve">Checar inglês</button>
     <button id="exp" class="sec" title="__EXPT__" __EXPD__>Exportar para arquivo</button>
   </div>
 
@@ -399,6 +405,45 @@ async function buscarTemporada(){
   } finally { $('#ir').disabled=false; $('#ir').textContent='Buscar nesta temporada'; }
 }
 
+// ---- checar fonte de tradução (inglês embutido/online/nenhum) ----
+function marcaFonte(rk, classe){
+  const card=document.querySelector(`.card[data-rk="${rk}"]`); if(!card) return;
+  const ctit=card.querySelector('.ctit'); const velho=ctit.querySelector('.fonte'); if(velho) velho.remove();
+  const M={emb:['inglês embutido','ok'],online:['inglês online','ok'],sem:['sem inglês · Whisper','no'],tem:['',''] };
+  const [txt,cls]=M[classe]||['',''];
+  if(!txt) return;
+  const b=document.createElement('span'); b.className='fonte '+cls; b.textContent=txt;
+  b.title = classe==='sem' ? 'Nenhuma legenda em inglês (embutida ou online) — só Whisper resolve'
+          : 'Dá para traduzir a partir do inglês ('+(classe==='emb'?'embutido no arquivo':'achável online')+')';
+  ctit.appendChild(b);
+}
+async function checarFonte(){
+  const serie=$('#serie').value, temp=$('#temp').value;
+  if(!serie||!temp){ return; }
+  $('#fonte').disabled=true; $('#fonte').textContent='checando…';
+  const box=$('#resumo-cob'); box.className='cob ativo'; box.textContent='checando inglês…';
+  const c={tem:0,emb:0,online:0,sem:0};
+  try{
+    const r=await fetch(`api/fonte?serie=${serie}&temporada=${temp}`+qi());
+    const leitor=r.body.getReader(); const dec=new TextDecoder(); let resto='';
+    while(true){
+      const {done,value}=await leitor.read(); if(done) break;
+      resto+=dec.decode(value,{stream:true});
+      const partes=resto.split('\\n'); resto=partes.pop();
+      for(const p of partes) if(p.trim()){ try{ const d=JSON.parse(p);
+        if(d.classe in c) c[d.classe]++;
+        marcaFonte(d.rk,d.classe);
+        if(d.total){ $('#pi').style.width=(100*d.i/d.total)+'%'; box.textContent=`checando inglês… ${d.i}/${d.total}`; }
+      }catch(e){} }
+    }
+    $('#pi').style.width='0';
+    const trad=c.emb+c.online;
+    box.className='cob '+(c.sem?'parcial':'ok');
+    box.textContent=`${trad} traduzível (${c.emb} embutido + ${c.online} online) · ${c.sem} sem inglês (só Whisper) · ${c.tem} já têm ${idiomaNome}`;
+  } finally { $('#fonte').disabled=false; $('#fonte').textContent='Checar inglês'; }
+}
+$('#fonte').onclick=checarFonte;
+
 $('#idioma').addEventListener('change',()=>{ idiomaAlvo=$('#idioma').value;
   idiomaNome=$('#idioma').selectedOptions[0].textContent; carregarEpisodios(); });
 $('#lib').addEventListener('change',()=>carregarSeries($('#lib').value));
@@ -478,6 +523,9 @@ class Handler(BaseHTTPRequestHandler):
         if rota == "/api/episodios":
             return self._fluxo_episodios(q)
 
+        if rota == "/api/fonte":
+            return self._fluxo_fonte(q)
+
         if rota == "/api/capa":
             rk = (q.get("rk") or [""])[0]
             img = self.plex.capa(rk) if rk else None
@@ -516,6 +564,20 @@ class Handler(BaseHTTPRequestHandler):
         from .plex import IDIOMAS
         cod = (q.get("idioma") or [""])[0]
         return cod if cod in IDIOMAS else self.cfg.idioma
+
+    def _fluxo_fonte(self, q):
+        from .plex import fonte_traducao
+        serie = (q.get("serie") or [""])[0]
+        temp = (q.get("temporada") or [""])[0]
+        if not serie or not temp:
+            return self._envia(b"informe serie e temporada", "text/plain", 400)
+        tks = self.plex.tokens_serie(serie)
+        self._abre_fluxo()
+        try:
+            for evt in fonte_traducao(self.plex, serie, temp, self._idioma(q), tks):
+                self._emite(evt)
+        except Exception as e:  # noqa: BLE001
+            self._emite({"erro": str(e)})
 
     def _candidatos(self, q):
         """Lista os candidatos de um episódio, para escolha manual no painel."""

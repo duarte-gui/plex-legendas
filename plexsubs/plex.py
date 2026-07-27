@@ -531,6 +531,31 @@ def cobertura_serie(plex: Plex, serie_rk: str, idioma: str) -> Iterator[dict]:
                "com": com, "emb": emb, "tem": tem, "en_emb": en_emb}
 
 
+def fonte_traducao(plex: Plex, serie_rk: str, temporada: str, idioma: str,
+                   tokens_serie: list[list[str]] | None = None) -> Iterator[dict]:
+    """Por episódio, classifica a FONTE de tradução disponível — para o painel
+    mostrar quem dá pra traduzir e quem só o Whisper resolve. Só leitura.
+
+    Classes: 'tem' (já tem o idioma-alvo), 'emb' (inglês embutido no arquivo),
+    'online' (inglês achável no Plex, passa a trava de série), 'sem' (nenhum
+    inglês em lugar nenhum → Whisper). A busca online (cara) só roda em quem não
+    tem o alvo nem inglês embutido.
+    """
+    eps = [e for e in plex.episodios(serie_rk) if e.temporada == str(temporada)]
+    for i, ep in enumerate(eps, 1):
+        streams = plex.streams_legenda(ep.rating_key)
+        if any(casa_idioma(s["tag"], s["code"], s["lang"], idioma) for s in streams):
+            classe = "tem"
+        elif any(s["embutida"] and "english" in s["lang"].lower() for s in streams):
+            classe = "emb"
+        else:
+            arq = ep.arquivo or plex.arquivo_do_episodio(ep.rating_key)
+            cands = plex.buscar(ep.rating_key, "en", arq, tokens_serie=tokens_serie)
+            classe = "online" if cands else "sem"
+        yield {"i": i, "total": len(eps), "rk": ep.rating_key,
+               "ep": f"S{ep.temporada}E{ep.numero}", "classe": classe}
+
+
 def processar_serie(plex: Plex, serie_rk: str, idioma: str, score_min: int,
                     reavaliar: bool = False,
                     so_existentes: bool = False,
