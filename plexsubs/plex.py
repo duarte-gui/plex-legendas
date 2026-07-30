@@ -280,7 +280,8 @@ class Plex:
                                 "tag": s.get("languageTag") or "",
                                 "code": s.get("languageCode") or "",
                                 "embutida": not s.get("key"),
-                                "provedor": bool(s.get("providerTitle"))})
+                                "provedor": bool(s.get("providerTitle")),
+                                "sel": s.get("selected") == "1"})
         return out
 
     def afinidade_atual(self, ep_rk: str, arquivo: str, idioma: str) -> int:
@@ -489,11 +490,14 @@ def _card_status(plex: Plex, rk: str, rotulo: str, numero: str, titulo: str,
     de_provedor = any(casa_idioma(s["tag"], s["code"], s["lang"], idioma) and s["provedor"]
                       for s in streams)
     afin = plex.afinidade_atual(rk, arquivo, idioma) if tem_pt else -1
+    sel = next((s for s in streams if s.get("sel")), None)
     return {"i": i, "total": total, "rk": rk, "ep": rotulo, "numero": numero,
             "titulo": titulo, "tem_pt": tem_pt, "afinidade": afin,
             "emb_langs": emb_langs,
             "en_emb": any("english" in l.lower() for l in emb_langs),
-            "de_provedor": de_provedor}
+            "de_provedor": de_provedor,
+            "aplicada": sel["lang"] if sel else "",
+            "aplicada_alvo": bool(sel and casa_idioma(sel["tag"], sel["code"], sel["lang"], idioma))}
 
 
 def filme_status(plex: Plex, filme_rk: str, idioma: str) -> Iterator[dict]:

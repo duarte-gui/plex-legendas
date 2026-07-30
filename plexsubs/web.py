@@ -68,6 +68,11 @@ PAGINA = """<!doctype html>
   .fonte.ok { color:var(--ok); border:1px solid var(--ok) }
   .fonte.no { color:#fff; background:#c0392b }
   .fonte.tem { color:var(--tenue); border:1px solid var(--linha) }
+  .aplic { display:inline-block; font-size:.66rem; font-weight:700; margin-right:.4rem;
+           padding:.03rem .34rem; border-radius:3px; vertical-align:middle }
+  .aplic.ok { color:#fff; background:var(--ok) }
+  .aplic.wa { color:#fff; background:var(--alerta) }
+  .aplic.no { color:var(--tenue); border:1px solid var(--linha) }
   .grade { display:flex; flex-direction:column; gap:.4rem }
   .card { display:flex; align-items:center; gap:.8rem; padding:.6rem .8rem; background:var(--papel);
           border:1px solid var(--linha); border-left:4px solid var(--linha); cursor:pointer }
@@ -297,11 +302,17 @@ function cardEpisodio(d){
   const el=document.createElement('div');
   el.className='card'+(d.tem_pt?(fraca?' fraca':' tem'):'');
   el.dataset.rk=d.rk; el.dataset.ep=d.ep;
+  // faixa que o Plex EXIBE agora (selected=1): verde se é o idioma-alvo,
+  // laranja se é outra língua aplicada, cinza se nenhuma.
+  const ap = d.aplicada
+    ? `<span class="aplic ${d.aplicada_alvo?'ok':'wa'}" title="legenda aplicada (a que aparece ao dar play): ${d.aplicada}">▶ ${codigoIdioma(d.aplicada)}</span>`
+    : `<span class="aplic no" title="nenhuma legenda aplicada">▶ nenhuma</span>`;
   let sub;
   if(!d.tem_pt) sub='<span class="pill no">sem legenda</span>clique para escolher';
   else if(fraca) sub=`<span class="pill wa">legenda pt · afinidade ${d.afinidade}</span>pode não casar — clique para trocar`;
   else if(d.de_provedor) sub=`<span class="pill ok">legenda pt · afinidade ${d.afinidade}</span>`;
   else sub='<span class="pill ok">legenda pt (arquivo)</span>';
+  sub = ap + sub;
   el.innerHTML=`<div class="cnum">E${String(d.numero).padStart(2,'0')}</div>`
     +`<div class="cinfo"><div class="ctit"></div><div class="csub">${sub}</div></div>`
     +`<div class="cgo">›</div>`;
